@@ -1,5 +1,6 @@
 
-CXX = CC
+CXX = mpiicc
+VPATH = ./src
 
 USE_TAUPROF=0
 ifeq ($(USE_TAUPROF),1)
