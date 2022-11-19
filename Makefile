@@ -1,6 +1,8 @@
 
+
 CXX = dpcpp
 MPICXX = mpiicc
+VPATH = ./src
 
 USE_TAUPROF = 0
 
