@@ -521,17 +521,24 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm> &localCinfo,
 
 void distUpdateLocalCinfo(std::vector<Comm> &localCinfo, const std::vector<Comm> &localCupdate)
 {
-    size_t csz = localCinfo.size();
+  size_t csz = localCinfo.size();
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp for schedule(runtime)
-#else
-#pragma omp for schedule(static)
-#endif
-    for (GraphElem i = 0L; i < csz; i++) {
-        localCinfo[i].size += localCupdate[i].size;
-        localCinfo[i].degree += localCupdate[i].degree;
-    }
+  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
+  std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
+
+  auto _localCinfo = usm_localCinfo.data();
+  auto _localCupdate = usm_localCupdate.data();
+
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(csz, [=](sycl::id<1> i){
+      _localCinfo[i].size += _localCupdate[i].size;
+      _localCinfo[i].degree += _localCupdate[i].degree;
+    });
+  }).wait();
+
+
+  std::memcpy(localCinfo.data(), usm_localCinfo.data(), usm_localCinfo.size() * sizeof(Comm));
+  // localCupdate is not updated -- check const above
 }
 
 void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight> &clusterWeight,
@@ -1432,6 +1439,8 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     t0 = MPI_Wtime();
 #endif
 
+    // why is there a parallel
+
 #pragma omp parallel default(shared), shared(clusterWeight, localCupdate, currComm, targetComm, \
         vDegree, localCinfo, remoteCinfo, remoteComm, pastComm, dg, remoteCupdate), \
         firstprivate(constantForSecondTerm, me)
@@ -1450,10 +1459,8 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
         }
     }
 
-#pragma omp parallel default(none), shared(localCinfo, localCupdate)
-    {
-        distUpdateLocalCinfo(localCinfo, localCupdate);
-    }
+    // Done using SYCL
+    distUpdateLocalCinfo(localCinfo, localCupdate);
 
     // communicate remote communities
     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
