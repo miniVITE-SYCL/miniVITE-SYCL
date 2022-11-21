@@ -79,10 +79,18 @@ const int CommunityDataTag  = 5;
 
 static MPI_Datatype commType;
 
-// create corresponding STL usm shadow containers
+// We define USM STL allocators
 typedef sycl::usm_allocator<GraphWeight, sycl::usm::alloc::shared> vec_gw_alloc;
 typedef sycl::usm_allocator<GraphElem, sycl::usm::alloc::shared> vec_ge_alloc;
 typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
+
+// Defined a SYCL queue using the CPU selector
+sycl::queue q{sycl::cpu_selector{}};
+
+// we instantiate USM STL allocators (dependency on sycl::queue q)
+vec_gw_alloc vec_gw_allocator(q);
+vec_ge_alloc vec_ge_allocator(q);
+vec_comm_alloc vec_comm_allocator(q);
 
 
 void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
@@ -200,17 +208,10 @@ void distInitLouvain(const Graph &dg, std::vector<GraphElem> &pastComm,
   localCupdate.resize(nv);
 
   // SYCL Construct and USM handling Start --------
-  // Defined a SYCL queue using the CPU selector
-  sycl::queue q{sycl::cpu_selector{}};
-  // we instantiate allocators
-  vec_gw_alloc vec_gw_allocator(q);
-  vec_ge_alloc vec_ge_allocator(q);
-  vec_comm_alloc vec_comm_allocator(q);
   // we use the allocated memory in the constructor
   std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.size(), vec_gw_allocator);
-  std::vector<GraphElem, vec_ge_alloc> 
-      usm_pastComm(pastComm.size(), vec_ge_allocator),
-      usm_currComm(currComm.size(), vec_ge_allocator);
+  std::vector<GraphElem, vec_ge_alloc> usm_pastComm(pastComm.size(), vec_ge_allocator),
+                                       usm_currComm(currComm.size(), vec_ge_allocator);
   std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.size(), vec_comm_allocator);
   // we create a shadow usm memory graph
   void *memory_block = sycl::malloc_shared<Graph>(1, q);
