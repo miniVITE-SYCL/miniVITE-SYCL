@@ -79,34 +79,24 @@ const int CommunityDataTag  = 5;
 
 static MPI_Datatype commType;
 
+// create corresponding STL usm shadow containers
+typedef sycl::usm_allocator<GraphWeight, sycl::usm::alloc::shared> vec_gw_alloc;
+typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
 
 
-void distSumVertexDegree(const Graph &g, std::vector<GraphWeight> &vDegree, std::vector<Comm> &localCinfo)
+
+void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
 {
-  // Defined a SYCL queue using the CPU selector
-  sycl::queue q{sycl::cpu_selector{}};
-
-  // create corresponding STL usm shadow containers
-  typedef sycl::usm_allocator<GraphWeight, sycl::usm::alloc::shared> vec_gw_alloc;
-  typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
-  
-  // we create an allocator
-  vec_gw_alloc vec_gw_allocator(q);
-  vec_comm_alloc vec_comm_allocator(q);
-
-  // we use the allocated memory in the constructor
-  std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.size(), vec_gw_allocator);
-  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.size(), vec_comm_allocator);
 
   // we then create pointers to the underlying data
-  auto _usm_vDegree = usm_vDegree.data();
-  auto _usm_localCinfo = usm_localCinfo.data();
+  auto _vDegree = vDegree.data();
+  auto _localCinfo = localCinfo.data();
 
   const GraphElem nv = g.get_lnv();
 
-  // we create a shadow usm memory graph
-  void *memory_block = sycl::malloc_shared<Graph>(1, q);
-  Graph *_g = new(memory_block) Graph(g);
+
+  const Graph *_g = &g;
+
 
   q.submit([&](sycl::handler &h){
     sycl::stream out(1024, 768, h);
@@ -120,33 +110,33 @@ void distSumVertexDegree(const Graph &g, std::vector<GraphWeight> &vDegree, std:
         tw += edge.weight_;
       }
 
-      _usm_vDegree[i] = tw;
+      _vDegree[i] = tw;
     
-      _usm_localCinfo[i].degree = tw;
-      _usm_localCinfo[i].size = 1L;
+      _localCinfo[i].degree = tw;
+      _localCinfo[i].size = 1L;
     });
   }).wait(); // currently we wait until this has been executed
   // Omp parallel blocks have barriers at the end so this is the same
 
-  // update our original STL containers from our SYCL USM memory
-  std::memcpy(vDegree.data(), usm_vDegree.data(), usm_vDegree.size() * sizeof(GraphWeight));
-  std::memcpy(localCinfo.data(), usm_localCinfo.data(), usm_localCinfo.size() * sizeof(Comm));
-
-  // We need to call the deconstructor for new placement objects
-  _g->~Graph();
-  // we then need to free the allocated block
-  sycl::free(_g, q);
 
 }
 
 
-GraphWeight distCalcConstantForSecondTerm(const std::vector<GraphWeight> &vDegree, MPI_Comm gcomm)
+GraphWeight distCalcConstantForSecondTerm(const std::vector<GraphWeight> &vDegree, MPI_Comm gcomm) //, sycl::queue q)
 {
+
   GraphWeight totalEdgeWeightTwice = 0.0;
   GraphWeight localWeight = 0.0;
   int me = -1;
 
   const size_t vsz = vDegree.size();
+
+  // TODO: Find out how to do USM SYCL reduction
+  // q.submit([&](sycl::handler &h){
+  //   h.parallel_for(vsz, sycl::reduction(localWeight, plus<>()), [=](sycl::id<1> i){
+  //     localWeight += vDegree[i];
+  //   });
+  // }).wait();
 
 #ifdef OMP_SCHEDULE_RUNTIME
 #pragma omp parallel for default(shared), shared(vDegree), reduction(+: localWeight) schedule(runtime)
@@ -163,6 +153,8 @@ GraphWeight distCalcConstantForSecondTerm(const std::vector<GraphWeight> &vDegre
   return (1.0 / static_cast<GraphWeight>(totalEdgeWeightTwice));
 } // distCalcConstantForSecondTerm
 
+
+
 void distInitComm(std::vector<GraphElem> &pastComm, std::vector<GraphElem> &currComm, const GraphElem base)
 {
   const size_t csz = currComm.size();
@@ -171,6 +163,12 @@ void distInitComm(std::vector<GraphElem> &pastComm, std::vector<GraphElem> &curr
   assert(csz == pastComm.size());
 #endif
 
+  // q.submit([&](sycl::handler &h){
+  //   h.parallel_for(csz, [=](sycl::id<1> i){
+  //     pastComm[i] = i + base;
+  //     currComm[i] = i + base;
+  //   });
+  // }).wait();
 #ifdef OMP_SCHEDULE_RUNTIME
 #pragma omp parallel for default(shared), shared(pastComm, currComm), firstprivate(base), schedule(runtime)
 #else
@@ -199,10 +197,38 @@ void distInitLouvain(const Graph &dg, std::vector<GraphElem> &pastComm,
   localCinfo.resize(nv);
   localCupdate.resize(nv);
 
-  distSumVertexDegree(dg, vDegree, localCinfo);
+  // SYCL Construct and USM handling Start --------
+
+  // Defined a SYCL queue using the CPU selector
+  sycl::queue q{sycl::cpu_selector{}};
+  // we create an allocator
+  vec_gw_alloc vec_gw_allocator(q);
+  vec_comm_alloc vec_comm_allocator(q);
+  // we use the allocated memory in the constructor
+  std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.size(), vec_gw_allocator);
+  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.size(), vec_comm_allocator);
+  // we create a shadow usm memory graph
+  void *memory_block = sycl::malloc_shared<Graph>(1, q);
+  Graph *usm_g = new(memory_block) Graph(dg);
+
+  // SYCL Construct and USM handling End --------
+
+  distSumVertexDegree(*usm_g, usm_vDegree, usm_localCinfo, q);
+  // update our original STL containers from our SYCL USM memory
+  std::memcpy(vDegree.data(), usm_vDegree.data(), vDegree.size() * sizeof(GraphWeight));
+  std::memcpy(localCinfo.data(), usm_localCinfo.data(), localCinfo.size() * sizeof(Comm));
+  
+  
   constantForSecondTerm = distCalcConstantForSecondTerm(vDegree, gcomm);
 
   distInitComm(pastComm, currComm, base);
+  
+  // SYCL Construct destruction ---------
+  // We need to call the deconstructor for new placement objects
+  usm_g->~Graph();
+  // we then need to free the allocated block
+  sycl::free(usm_g, q);
+
 } // distInitLouvain
 
 GraphElem distGetMaxIndex(const std::unordered_map<GraphElem, GraphElem> &clmap, const std::vector<GraphWeight> &counter,
