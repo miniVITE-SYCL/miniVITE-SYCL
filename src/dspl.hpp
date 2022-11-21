@@ -104,7 +104,6 @@ void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> 
   const GraphElem nv = g.get_lnv();
 
   q.submit([&](sycl::handler &h){
-    sycl::stream out(1024, 768, h);
     h.parallel_for(nv, [=](sycl::id<1> i){
       GraphElem e0, e1;
       GraphWeight tw = 0.0;
