@@ -544,16 +544,26 @@ void distUpdateLocalCinfo(std::vector<Comm> &localCinfo, const std::vector<Comm>
 void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight> &clusterWeight,
         std::vector<Comm> &localCupdate)
 {
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp for schedule(runtime)
-#else
-#pragma omp for schedule(static)
-#endif
-    for (GraphElem i = 0L; i < nv; i++) {
-        clusterWeight[i] = 0;
-        localCupdate[i].degree = 0;
-        localCupdate[i].size = 0;
-    }
+  // We provide local SYCL USM constructs
+  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
+  std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
+
+  // we create pointers to underlying data
+  auto _clusterWeight = usm_clusterWeight.data();
+  auto _localCupdate = usm_localCupdate.data();
+
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(nv, [=](sycl::id<1> i){
+      _clusterWeight[i] = 0;
+      _localCupdate[i].degree = 0;
+      _localCupdate[i].size = 0;
+    });
+  }).wait();
+
+  std::memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
+  std::memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
+
+
 } // distCleanCWandCU
 
 #if defined(USE_MPI_RMA)
@@ -1439,13 +1449,13 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     t0 = MPI_Wtime();
 #endif
 
-    // why is there a parallel
+    // Done using SYCL
+    distCleanCWandCU(nv, clusterWeight, localCupdate);
 
 #pragma omp parallel default(shared), shared(clusterWeight, localCupdate, currComm, targetComm, \
         vDegree, localCinfo, remoteCinfo, remoteComm, pastComm, dg, remoteCupdate), \
         firstprivate(constantForSecondTerm, me)
     {
-        distCleanCWandCU(nv, clusterWeight, localCupdate);
 
 #ifdef OMP_SCHEDULE_RUNTIME
 #pragma omp for schedule(runtime)
@@ -1453,6 +1463,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 #pragma omp for schedule(guided) 
 #endif
         for (GraphElem i = 0; i < nv; i++) {
+            // Executes Lovauin Iteration (TODO: Need to port)
             distExecuteLouvainIteration(i, dg, currComm, targetComm, vDegree, localCinfo, 
                     localCupdate, remoteComm, remoteCinfo, remoteCupdate,
                     constantForSecondTerm, clusterWeight, me);
@@ -1462,10 +1473,10 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     // Done using SYCL
     distUpdateLocalCinfo(localCinfo, localCupdate);
 
-    // communicate remote communities
+    // communicate remote communities (TODO: Need to port)
     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
 
-    // compute modularity
+    // compute modularity (TODO: Need to port)
     currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
 
     // exit criteria
