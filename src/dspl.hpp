@@ -673,23 +673,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   }).wait();
 
   std::memcpy(scdata.data(), usm_scdata.data(), usm_scdata.size() * sizeof(GraphElem));
-
   // End SYCL Port
-
-  // Collects Communities of local vertices for remote nodes
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for shared(svdata, scdata, currComm) schedule(runtime)
-#else
-#pragma omp parallel for shared(svdata, scdata, currComm) schedule(static)
-#endif
-  for (GraphElem i = 0; i < ssz; i++) {
-    const GraphElem vertex = svdata[i];
-#ifdef DEBUG_PRINTF  
-    assert((vertex >= base) && (vertex < bound));
-#endif
-    const GraphElem comm = currComm[vertex - base];
-    scdata[i] = comm;
-  }
 
   std::vector<GraphElem> rcsizes(nprocs), scsizes(nprocs);
   std::vector<CommInfo> sinfo, rinfo;
