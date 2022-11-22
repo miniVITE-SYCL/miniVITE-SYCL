@@ -484,17 +484,34 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm> &localCinfo,
   assert((clusterWeight.size() == nv));
 #endif
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for default(shared), shared(clusterWeight, localCinfo), \
-  reduction(+: le_xx), reduction(+: la2_x) schedule(runtime)
-#else
-#pragma omp parallel for default(shared), shared(clusterWeight, localCinfo), \
-  reduction(+: le_xx), reduction(+: la2_x) schedule(static)
-#endif
-  for (GraphElem i = 0L; i < nv; i++) {
-    le_xx += clusterWeight[i];
-    la2_x += static_cast<GraphWeight>(localCinfo[i].degree) * static_cast<GraphWeight>(localCinfo[i].degree); 
-  } 
+  // auto _accumulator = sycl::malloc_host<GraphWeight>(2, q);
+  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
+  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
+  auto _localCinfo = usm_localCinfo.data();
+  auto _clusterWeight = usm_clusterWeight.data();
+
+  GraphWeight *_le_xx = sycl::malloc_host<GraphWeight>(1, q);
+  GraphWeight *_la2_x = sycl::malloc_host<GraphWeight>(1, q);
+  *_le_xx = 0;
+  *_la2_x = 0;
+
+  // NOTE: The order of the arguments matters for the parallel_for lambda
+  // This order corresponds to the order of the reductions
+  int local_group_size = 4;
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(sycl::nd_range<1>{nv, local_group_size},
+                   sycl::reduction( _la2_x, std::plus<>()),
+                   sycl::reduction(_le_xx, std::plus<>()),
+                   [=](sycl::nd_item<1> it, auto &_la2_x, auto &_le_xx){
+                      int i = it.get_global_id(0);
+                      _le_xx += _clusterWeight[i];
+                      _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
+                   });
+  }).wait();
+
+  le_xx = *_le_xx;
+  la2_x = *_la2_x;
+
   le_la_xx[0] = le_xx;
   le_la_xx[1] = la2_x;
 
@@ -536,7 +553,6 @@ void distUpdateLocalCinfo(std::vector<Comm> &localCinfo, const std::vector<Comm>
     });
   }).wait();
 
-
   std::memcpy(localCinfo.data(), usm_localCinfo.data(), usm_localCinfo.size() * sizeof(Comm));
   // localCupdate is not updated -- check const above
 }
@@ -562,7 +578,6 @@ void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight> &clusterWeigh
 
   std::memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
   std::memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
-
 
 } // distCleanCWandCU
 
@@ -1473,7 +1488,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     // Done using SYCL
     distUpdateLocalCinfo(localCinfo, localCupdate);
 
-    // communicate remote communities (TODO: Need to port)
+    // communicate remote communities (Naive SYCL not required (room for SYCLization))
     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
 
     // compute modularity (TODO: Need to port)
