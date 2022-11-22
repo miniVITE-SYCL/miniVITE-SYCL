@@ -651,6 +651,31 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   const GraphElem nv = dg.get_lnv();
   MPI_Comm gcomm = dg.get_comm();
 
+  // SYCL port
+  // Collects Communities of local vertices for remote nodes
+  std::vector<GraphElem, vec_ge_alloc> usm_svdata(svdata.begin(), svdata.end(), vec_ge_allocator);
+  std::vector<GraphElem, vec_ge_alloc> usm_scdata(scdata.begin(), scdata.end(), vec_ge_allocator);
+  std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
+  auto _svdata = usm_svdata.data();
+  auto _scdata = usm_scdata.data();
+  auto _currComm = usm_currComm.data();
+
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(ssz, [=](sycl::id<1> i){
+      const GraphElem vertex = _svdata[i];
+#ifdef DEBUG_PRINTF
+      assert((vertex >= base) && (vertex < bound));
+#endif
+      const GraphElem comm = _currComm[vertex - base];
+      _scdata[i] = comm;
+    });
+
+  }).wait();
+
+  std::memcpy(scdata.data(), usm_scdata.data(), usm_scdata.size() * sizeof(GraphElem));
+
+  // End SYCL Port
+
   // Collects Communities of local vertices for remote nodes
 #ifdef OMP_SCHEDULE_RUNTIME
 #pragma omp parallel for shared(svdata, scdata, currComm) schedule(runtime)
