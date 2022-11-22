@@ -1395,6 +1395,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
   GraphWeight currMod = -1.0;
   int numIters = 0;
   
+  // Ported to SYCL
   distInitLouvain(dg, pastComm, currComm, vDegree, clusterWeight, localCinfo, 
           localCupdate, constantForSecondTerm, me);
   targetComm.resize(nv);
@@ -1421,6 +1422,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
   MPI_Exscan(ssizes.data(), (GraphElem*)disp.data(), nprocs, MPI_GRAPH_TYPE, 
           MPI_SUM, gcomm);
 #else
+  // TODO: Port to SYCL
   exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
           svdata, rvdata, me, nprocs);
 #endif
@@ -1449,6 +1451,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
             remoteCinfo, remoteComm, remoteCupdate, 
             commwin, disp);
 #else
+    // TODO: Port to SYCL
     fillRemoteCommunities(dg, me, nprocs, ssz, rsz, ssizes, 
             rsizes, svdata, rvdata, currComm, localCinfo, 
             remoteCinfo, remoteComm, remoteCupdate);
@@ -1464,7 +1467,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     t0 = MPI_Wtime();
 #endif
 
-    // Done using SYCL
+    // Ported to SYCL
     distCleanCWandCU(nv, clusterWeight, localCupdate);
 
 #pragma omp parallel default(shared), shared(clusterWeight, localCupdate, currComm, targetComm, \
@@ -1485,13 +1488,15 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
         }
     }
 
-    // Done using SYCL
+    // Ported to SYCL
     distUpdateLocalCinfo(localCinfo, localCupdate);
 
-    // communicate remote communities (Naive SYCL not required (room for SYCLization))
+    // Naive SYCL port not required (but there is room for SYCLization)
+    // communicate remote communities 
     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
 
-    // compute modularity (TODO: Need to port)
+    // Ported To SYCL
+    // compute modularity
     currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
 
     // exit criteria
@@ -1502,21 +1507,28 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     if (prevMod < lower)
         prevMod = lower;
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for default(shared) \
-    shared(pastComm, currComm, targetComm) \
-    schedule(runtime)
-#else
-#pragma omp parallel for default(shared) \
-    shared(pastComm, currComm, targetComm) \
-    schedule(static)
-#endif
-    for (GraphElem i = 0; i < nv; i++) {
-        GraphElem tmp = pastComm[i];
-        pastComm[i] = currComm[i];
-        currComm[i] = targetComm[i];
-        targetComm[i] = tmp;
-    }
+    // Define sycl USM constructs
+    std::vector<GraphElem, vec_ge_alloc> usm_pastComm(pastComm.begin(), pastComm.end(), vec_ge_allocator);
+    std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
+    std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
+    auto _pastComm = usm_pastComm.data();
+    auto _currComm = usm_currComm.data();
+    auto _targetComm = usm_targetComm.data();
+
+    q.submit([&](sycl::handler &h){
+      h.parallel_for(nv, [=](sycl::id<1> i){
+        GraphElem tmp = _pastComm[i];
+        _pastComm[i] = _currComm[i];
+        _currComm[i] = _targetComm[i];
+        _targetComm[i] = tmp;
+      });
+    }).wait();
+
+    // Update original STL containers
+    std::memcpy(pastComm.data(), usm_pastComm.data(), usm_pastComm.size() * sizeof(GraphElem));
+    std::memcpy(currComm.data(), usm_currComm.data(), usm_currComm.size() * sizeof(GraphElem));
+    std::memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
+
   } // end of Louvain iteration
 
 #if defined(USE_MPI_RMA)
