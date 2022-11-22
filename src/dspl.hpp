@@ -1303,16 +1303,27 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
           1, MPI_GRAPH_TYPE, gcomm);
 
   GraphElem rsz_r = 0;
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for shared(rsizes) \
-  reduction(+:rsz_r) schedule(runtime)
-#else
-#pragma omp parallel for shared(rsizes) \
-  reduction(+:rsz_r) schedule(static)
-#endif
-  for (int i = 0; i < nprocs; i++)
-    rsz_r += rsizes[i];
-  rsz = rsz_r;
+  
+  
+  // SYCL Port
+  std::vector<GraphElem, vec_ge_alloc> usm_rsizes(rsizes.begin(), rsizes.end(), vec_ge_allocator);
+  GraphElem *_rsz_r = sycl::malloc_host<GraphElem>(1, q);
+  *_rsz_r = rsz_r;
+  auto _rsizes = usm_rsizes.data();
+
+  int local_group_size = 4;
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(sycl::nd_range<1> {nprocs, local_group_size},
+                  sycl::reduction(_rsz_r, std::plus<>()),
+                  [=](sycl::nd_item<1> it, auto &_rsz_r){
+                    int i = it.get_global_id(0);
+                    _rsz_r += _rsizes[i];
+                  });
+  }).wait();
+
+
+  rsz_r = *_rsz_r;
+  // SYCL Port end
   
   svdata.resize(ssz);
   rvdata.resize(rsz);
