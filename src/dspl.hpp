@@ -829,16 +829,29 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   ta += (t1 - t0);
 #endif
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for shared(rcsizes) \
-  reduction(+:rtcsz) schedule(runtime)
-#else
-#pragma omp parallel for shared(rcsizes) \
-  reduction(+:rtcsz) schedule(static)
-#endif
-  for (int i = 0; i < nprocs; i++) {
-    rtcsz += rcsizes[i];
-  }
+
+  // SYCL Port
+  std::vector<GraphElem, vec_ge_alloc> usm_rcsizes(rcsizes.begin(), rcsizes.end(), vec_ge_allocator);
+  auto _rcsizes = usm_rcsizes.data();
+
+  GraphElem *_rtcsz = sycl::malloc_host<GraphElem>(1, q);
+  *_rtcsz = rtcsz;
+
+  // TODO: Replace explicit group size with default SYCL runtime group size selection
+  int local_group_size = 4;
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(
+      sycl::nd_range<1>{nprocs, local_group_size},
+      sycl::reduction(_rtcsz, std::plus<>()),
+      [=](sycl::nd_item<1> it, auto& _rtcsz) {
+        int i = it.get_global_id(0);
+        _rtcsz += _rcsizes[i];
+    });
+  }).wait();
+
+  rtcsz = *_rtcsz;
+  // SYCL Port End
+
 
 #ifdef DEBUG_PRINTF  
   std::cout << "[" << me << "]Total communities to receive: " << rtcsz << std::endl;
