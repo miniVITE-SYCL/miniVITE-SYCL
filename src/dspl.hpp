@@ -83,6 +83,8 @@ static MPI_Datatype commType;
 typedef sycl::usm_allocator<GraphWeight, sycl::usm::alloc::shared> vec_gw_alloc;
 typedef sycl::usm_allocator<GraphElem, sycl::usm::alloc::shared> vec_ge_alloc;
 typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
+typedef sycl::usm_allocator<CommInfo, sycl::usm::alloc::shared> vec_commi_alloc;
+typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
 
 // Defined a SYCL queue using the CPU selector
 sycl::queue q{sycl::cpu_selector{}};
@@ -91,6 +93,8 @@ sycl::queue q{sycl::cpu_selector{}};
 vec_gw_alloc vec_gw_allocator(q);
 vec_ge_alloc vec_ge_allocator(q);
 vec_comm_alloc vec_comm_allocator(q);
+vec_commi_alloc vec_commi_allocator(q);
+vec_vec_commi_alloc vec_vec_commi_allocator(q);
 
 
 void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
@@ -1141,14 +1145,19 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
   const double t0 = MPI_Wtime();
 #endif
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for schedule(runtime)
-#else
-#pragma omp parallel for schedule(static)
-#endif
-  for (int i = 0; i < nprocs; i++) {
-    send_sz[i] = remoteArray[i].size();
-  }
+
+  // Ported to SYCL
+  std::vector<GraphElem, vec_ge_alloc> usm_send_sz(send_sz.begin(), send_sz.end(), vec_ge_allocator);
+  std::vector<std::vector<CommInfo>, vec_vec_commi_alloc> usm_remoteArray(remoteArray.begin(), remoteArray.end(), vec_vec_commi_allocator);
+  auto _send_sz = usm_send_sz.data();
+  auto _remoteArray = usm_remoteArray.data();
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(nprocs, [=](sycl::id<1> i){
+      _send_sz[i] = _remoteArray[i].size();
+    });
+  }).wait();
+
+  std::memcpy(send_sz.data(), usm_send_sz.data(), usm_send_sz.size() *sizeof(GraphElem));
 
   MPI_Alltoall(send_sz.data(), 1, MPI_GRAPH_TYPE, recv_sz.data(), 
           1, MPI_GRAPH_TYPE, gcomm);
