@@ -140,26 +140,29 @@ GraphWeight distCalcConstantForSecondTerm(const std::vector<GraphWeight, vec_gw_
   // reduction using buffers (so I subbed out USM)
   // we then create pointers to the underlying data
   auto _vDegree = vDegree.data();
-  GraphWeight *localWeight = sycl::malloc_host<GraphWeight>(1, q);
-  *localWeight = 0;
+  GraphWeight localWeight = 0;
+  GraphWeight *usm_localWeight = sycl::malloc_host<GraphWeight>(1, q);
+  *usm_localWeight = 0;
 
   q.submit([&](sycl::handler &h){
     h.parallel_for(
       sycl::nd_range<1>{vsz, local_group_size},
-      sycl::reduction(localWeight, std::plus<>()),
-      [=](sycl::nd_item<1> it, auto& localWeight) {
+      sycl::reduction(usm_localWeight, std::plus<>()),
+      [=](sycl::nd_item<1> it, auto& usm_localWeight) {
         int i = it.get_global_id(0);
-        localWeight += _vDegree[i];
+        usm_localWeight += _vDegree[i];
     });
   }).wait();
 
 
+  localWeight = *usm_localWeight;
+  // We free the USM memory
+  sycl::free(usm_localWeight, q);
+
   // Global reduction
-  MPI_Allreduce(localWeight, &totalEdgeWeightTwice, 1, 
+  MPI_Allreduce(&localWeight, &totalEdgeWeightTwice, 1, 
           MPI_WEIGHT_TYPE, MPI_SUM, gcomm);
 
-  // We free the USM memory
-  free(localWeight);
 
   // ... and finally return this constant
   return (1.0 / static_cast<GraphWeight>(totalEdgeWeightTwice));
@@ -1333,8 +1336,9 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 
 
   rsz_r = *_rsz_r;
+  rsz = rsz_r;
   // SYCL Port end
-  
+
   svdata.resize(ssz);
   rvdata.resize(rsz);
 
