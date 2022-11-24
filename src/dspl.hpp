@@ -1158,6 +1158,8 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
   }).wait();
 
   std::memcpy(send_sz.data(), usm_send_sz.data(), usm_send_sz.size() *sizeof(GraphElem));
+  // End of Port
+
 
   MPI_Alltoall(send_sz.data(), 1, MPI_GRAPH_TYPE, recv_sz.data(), 
           1, MPI_GRAPH_TYPE, gcomm);
@@ -1168,6 +1170,8 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
 #endif
 
   GraphElem rcnt = 0, scnt = 0;
+
+
 #ifdef OMP_SCHEDULE_RUNTIME
 #pragma omp parallel for shared(recv_sz, send_sz) \
   reduction(+:rcnt, scnt) schedule(runtime)
@@ -1226,20 +1230,27 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
   std::cout << "[" << me << "]Update remote community MPI time: " << (t3 - t2) << std::endl;
 #endif
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for shared(rdata, localCinfo) schedule(runtime)
-#else
-#pragma omp parallel for shared(rdata, localCinfo) schedule(dynamic)
-#endif
-  for (GraphElem i = 0; i < rcnt; i++) {
-    const CommInfo &curr = rdata[i];
 
+// SYCL port (CURRENTLY)
+std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
+std::vector<CommInfo, vec_commi_alloc> usm_rdata(rdata.begin(), rdata.end(), vec_commi_allocator);
+auto _localCinfo = usm_localCinfo.data();
+auto _rdata = usm_rdata.data();
+
+q.submit([&](sycl::handler &h){
+  h.parallel_for(rcnt, [=](sycl::id<1> i){
+    const CommInfo &curr = _rdata[i];
 #ifdef DEBUG_PRINTF  
     assert(dg.get_owner(curr.community) == me);
 #endif
-    localCinfo[curr.community-base].size += curr.size;
-    localCinfo[curr.community-base].degree += curr.degree;
-  }
+    _localCinfo[curr.community-base].size += curr.size;
+    _localCinfo[curr.community-base].degree += curr.degree;
+  });
+}).wait();
+
+std::memcpy(localCinfo.data(), usm_localCinfo.data(), usm_localCinfo.size() * sizeof(Comm));
+// End port
+
 } // updateRemoteCommunities
 
 // initial setup before Louvain iteration begins
