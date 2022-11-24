@@ -994,22 +994,27 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   for (int i = 0; i < nprocs; i++) {
       if (i != me) {
 #if defined(USE_MPI_SENDRECV)
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for default(none), shared(rcsizes, rcomms, localCinfo, sinfo), \
-          firstprivate(i, rpos, base), schedule(runtime) , if(rcsizes[i] >= 1000)
+        // Porting to SYCL - Be careful with shadowing
+        std::vector<GraphElem, vec_ge_alloc> usm_rcomms(rcomms.begin(), rcomms.end(), vec_ge_allocator);
+        std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
+        std::vector<CommInfo, vec_commi_alloc> usm_sinfo(sinfo.begin(), sinfo.end(), vec_commi_allocator);
+        auto _rcomms = usm_rcomms.data();
+        auto _localCinfo = usm_localCinfo.data();
+        auto _sinfo = usm_sinfo.data();
 
-#else
-#pragma omp parallel for default(none), shared(rcsizes, rcomms, localCinfo, sinfo), \
-          firstprivate(i, rpos, base), schedule(guided) , if(rcsizes[i] >= 1000)
-#endif
-          for (GraphElem j = 0; j < rcsizes[i]; j++) {
-              const GraphElem comm = rcomms[rpos + j];
-              sinfo[rpos + j] = {comm, localCinfo[comm-base].size, localCinfo[comm-base].degree};
-          }
+        q.submit([&](sycl::handler &h){
+          h.parallel_for(rcsizes[i], [=](sycl::id<1> j){
+            const GraphElem comm = _rcomms[rpos + j];
+            _sinfo[rpos + j] = {comm, _localCinfo[comm-base].size, _localCinfo[comm-base].degree};
+          });
+        }).wait();
+
+        std::memcpy(sinfo.data(), usm_sinfo.data(), usm_sinfo.size() * sizeof(CommInfo));
+        // End of port
           
-          MPI_Sendrecv(sinfo.data() + rpos, rcsizes[i], commType, i, CommunityDataTag, 
-                  rinfo.data() + spos, scsizes[i], commType, i, CommunityDataTag, 
-                  gcomm, MPI_STATUSES_IGNORE);
+        MPI_Sendrecv(sinfo.data() + rpos, rcsizes[i], commType, i, CommunityDataTag, 
+                rinfo.data() + spos, scsizes[i], commType, i, CommunityDataTag, 
+                gcomm, MPI_STATUSES_IGNORE);
 #else
           if (scsizes[i] > 0) {
               MPI_Irecv(rinfo.data() + spos, scsizes[i], commType, i, CommunityDataTag, 
