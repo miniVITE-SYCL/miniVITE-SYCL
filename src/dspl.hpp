@@ -567,35 +567,26 @@ void distUpdateLocalCinfo(std::vector<Comm> &localCinfo, const std::vector<Comm>
 void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight> &clusterWeight,
         std::vector<Comm> &localCupdate)
 {
-  // // We provide local SYCL USM constructs
-  // std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
-  // std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
+  // We provide local SYCL USM constructs
+  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
+  std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
 
-  // // we create pointers to underlying data
-  // auto _clusterWeight = usm_clusterWeight.data();
-  // auto _localCupdate = usm_localCupdate.data();
+  // we create pointers to underlying data
+  auto _clusterWeight = usm_clusterWeight.data();
+  auto _localCupdate = usm_localCupdate.data();
 
-  // q.submit([&](sycl::handler &h){
-  //   h.parallel_for(nv, [=](sycl::id<1> i){
-  //     _clusterWeight[i] = 0;
-  //     _localCupdate[i].degree = 0;
-  //     _localCupdate[i].size = 0;
-  //   });
-  // }).wait();
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(nv, [=](sycl::id<1> i){
+      _clusterWeight[i] = 0;
+      _localCupdate[i].degree = 0;
+      _localCupdate[i].size = 0;
+    });
+  }).wait();
 
-  // std::memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
-  // std::memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
+  std::memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
+  std::memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp for schedule(runtime)
-#else
-#pragma omp for schedule(static)
-#endif
-    for (GraphElem i = 0L; i < nv; i++) {
-        clusterWeight[i] = 0;
-        localCupdate[i].degree = 0;
-        localCupdate[i].size = 0;
-    }
+
 } // distCleanCWandCU
 
 #if defined(USE_MPI_RMA)
@@ -1540,14 +1531,12 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     t0 = MPI_Wtime();
 #endif
 
-    // Done using SYCL
     distCleanCWandCU(nv, clusterWeight, localCupdate);
 
 #pragma omp parallel default(shared), shared(clusterWeight, localCupdate, currComm, targetComm, \
         vDegree, localCinfo, remoteCinfo, remoteComm, pastComm, dg, remoteCupdate), \
         firstprivate(constantForSecondTerm, me)
     {
-        distCleanCWandCU(nv, clusterWeight, localCupdate);
 
 #ifdef OMP_SCHEDULE_RUNTIME
 #pragma omp for schedule(runtime)
