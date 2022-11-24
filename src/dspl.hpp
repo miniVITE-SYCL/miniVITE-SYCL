@@ -85,6 +85,7 @@ typedef sycl::usm_allocator<GraphElem, sycl::usm::alloc::shared> vec_ge_alloc;
 typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
 typedef sycl::usm_allocator<CommInfo, sycl::usm::alloc::shared> vec_commi_alloc;
 typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
+typedef sycl::usm_allocator<int, sycl::usm::alloc::shared> vec_int_alloc;
 
 // Defined a SYCL queue using the CPU selector
 sycl::queue q{sycl::cpu_selector{}};
@@ -95,6 +96,7 @@ vec_ge_alloc vec_ge_allocator(q);
 vec_comm_alloc vec_comm_allocator(q);
 vec_commi_alloc vec_commi_allocator(q);
 vec_vec_commi_alloc vec_vec_commi_allocator(q);
+vec_int_alloc vec_int_allocator(q);
 
 
 void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
@@ -901,17 +903,25 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 
   for (int i = 0; i < nprocs; i++) {
       if (i != me) {
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for default(none), shared(rcsizes, rcomms, localCinfo, sinfo, rdispls), \
-          firstprivate(i, base), schedule(runtime) , if(rcsizes[i] >= 1000)
-#else
-#pragma omp parallel for default(none), shared(rcsizes, rcomms, localCinfo, sinfo, rdispls), \
-          firstprivate(i, base), schedule(guided) , if(rcsizes[i] >= 1000)
-#endif
-          for (GraphElem j = 0; j < rcsizes[i]; j++) {
-              const GraphElem comm = rcomms[rdispls[i] + j];
-              sinfo[rdispls[i] + j] = {comm, localCinfo[comm-base].size, localCinfo[comm-base].degree};
-          }
+        // Porting to SYCL
+        std::vector<GraphElem, vec_ge_alloc> usm_rcomms(rcomms.begin(), rcomms.end(), vec_ge_allocator);
+        std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
+        std::vector<CommInfo, vec_commi_alloc> usm_sinfo(sinfo.begin(), sinfo.end(), vec_commi_allocator);
+        std::vector<int, vec_int_alloc> usm_rdispls(rdispls.begin(), rdispls.end(), vec_int_allocator);
+        auto _rcomms = usm_rcomms.data();
+        auto _localCinfo = usm_localCinfo.data();
+        auto _sinfo = usm_sinfo.data();
+        auto _rdispls = usm_rdispls.data();
+
+        q.submit([&](sycl::handler &h){
+          h.parallel_for(rcsizes[i], [=](sycl::id<1> j){
+            const GraphElem comm = _rcomms[_rdispls[i] + j];
+            _sinfo[_rdispls[i] + j] = {comm, _localCinfo[comm-base].size, _localCinfo[comm-base].degree};
+          });
+        }).wait();
+
+        std::memcpy(sinfo.data(), usm_sinfo.data(), usm_sinfo.size() * sizeof(CommInfo));
+        // End of port
       }
   }
   
@@ -1019,7 +1029,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
           }
 #endif
 
-          // Porting to SYCL (CURRENTLY) - Be careful with shadowing
+          // Porting to SYCL - Be careful with shadowing
           std::vector<GraphElem, vec_ge_alloc> usm_rcomms(rcomms.begin(), rcomms.end(), vec_ge_allocator);
           std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
           std::vector<CommInfo, vec_commi_alloc> usm_sinfo(sinfo.begin(), sinfo.end(), vec_commi_allocator);
@@ -1228,7 +1238,7 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
 #endif
 
 
-// SYCL port (CURRENTLY)
+// SYCL port
 std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
 std::vector<CommInfo, vec_commi_alloc> usm_rdata(rdata.begin(), rdata.end(), vec_commi_allocator);
 auto _localCinfo = usm_localCinfo.data();
@@ -1531,8 +1541,12 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     t0 = MPI_Wtime();
 #endif
 
+    // Ported to SYCL
     distCleanCWandCU(nv, clusterWeight, localCupdate);
 
+
+// NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
+// TODO: Get experience with atomics and locking and porting these from OpenMP to SYCL
 #pragma omp parallel default(shared), shared(clusterWeight, localCupdate, currComm, targetComm, \
         vDegree, localCinfo, remoteCinfo, remoteComm, pastComm, dg, remoteCupdate), \
         firstprivate(constantForSecondTerm, me)
