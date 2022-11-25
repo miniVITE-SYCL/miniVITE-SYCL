@@ -86,6 +86,9 @@ typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
 typedef sycl::usm_allocator<CommInfo, sycl::usm::alloc::shared> vec_commi_alloc;
 typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
 typedef sycl::usm_allocator<int, sycl::usm::alloc::shared> vec_int_alloc;
+typedef sycl::usm_allocator<vec_ge_alloc, sycl::usm::alloc::shared> vec_vec_ge_alloc;
+typedef sycl::usm_allocator<std::unordered_set<GraphElem>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
+// typedef sycl::usm_allocator<std::unordered_set<GraphElem, vec_ge_alloc>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 
 // Defined a SYCL queue using the CPU selector
 sycl::queue q{sycl::cpu_selector{}};
@@ -97,6 +100,8 @@ vec_comm_alloc vec_comm_allocator(q);
 vec_commi_alloc vec_commi_allocator(q);
 vec_vec_commi_alloc vec_vec_commi_allocator(q);
 vec_int_alloc vec_int_allocator(q);
+vec_vec_ge_alloc vec_vec_ge_allocator(q);
+vec_uset_ge_alloc vec_uset_ge_allocator(q);
 
 
 void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
@@ -818,18 +823,37 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   t0 = MPI_Wtime();
 #endif
   GraphElem stcsz = 0, rtcsz = 0;
-  
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for shared(scsizes, rcinfo) \
-  reduction(+:stcsz) schedule(runtime)
+  int local_group_size = 4;
+
+  // Porting to SYCL
+  GraphElem *_stcsz = sycl::malloc_host<GraphElem>(1, q);
+  *_stcsz = stcsz;
+  std::vector<GraphElem, vec_ge_alloc> usm_scsizes(scsizes.begin(), scsizes.end(), vec_ge_allocator);
+
+#if defined(REPLACE_STL_UOSET_WITH_VECTOR)
+  std::vector< std::vector< GraphElem >, vec_vec_ge_alloc > usm_rcinfo(rcinfo.begin(), rcinfo.end(), vec_vec_ge_allocator);
 #else
-#pragma omp parallel for shared(scsizes, rcinfo) \
-  reduction(+:stcsz) schedule(static)
+  std::vector<std::unordered_set<GraphElem>, vec_uset_ge_alloc > usm_rcinfo(rcinfo.begin(), rcinfo.end(), vec_uset_ge_allocator);
 #endif
-  for (int i = 0; i < nprocs; i++) {
-    scsizes[i] = rcinfo[i].size();
-    stcsz += scsizes[i];
-  }
+
+  auto _scsizes = usm_scsizes.data();
+  auto _rcinfo = usm_rcinfo.data();
+
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(
+      sycl::nd_range<1>{nprocs, local_group_size},
+      sycl::reduction(_stcsz, std::plus<>()),
+      [=](sycl::nd_item<1> it, auto &_stcsz){
+      int i = it.get_global_id(0);
+      _scsizes[i] = _rcinfo[i].size();
+      _stcsz += _scsizes[i];
+    });
+  }).wait();
+
+  stcsz = *_stcsz;
+  std::memcpy(scsizes.data(), usm_scsizes.data(), usm_scsizes.size() * sizeof(GraphElem));
+  sycl::free(_stcsz, q);
+  // End SYCL port
 
   MPI_Alltoall(scsizes.data(), 1, MPI_GRAPH_TYPE, rcsizes.data(), 
           1, MPI_GRAPH_TYPE, gcomm);
@@ -848,7 +872,6 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   *_rtcsz = rtcsz;
 
   // TODO: Replace explicit group size with default SYCL runtime group size selection
-  int local_group_size = 4;
   q.submit([&](sycl::handler &h){
     h.parallel_for(
       sycl::nd_range<1>{nprocs, local_group_size},
@@ -861,7 +884,9 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 
   rtcsz = *_rtcsz;
   // SYCL Port End
-
+  std::cout << "End of SYCL Port" << std::endl;
+  MPI_Barrier(MPI_COMM_WORLD);
+  
 
 #ifdef DEBUG_PRINTF  
   std::cout << "[" << me << "]Total communities to receive: " << rtcsz << std::endl;
@@ -1535,6 +1560,9 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
             rsizes, svdata, rvdata, currComm, localCinfo, 
             remoteCinfo, remoteComm, remoteCupdate);
 #endif
+
+    std::cout << "Executed fillRemoteCommunities(...) " << std::endl;
+    MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef DEBUG_PRINTF  
     t1 = MPI_Wtime();
