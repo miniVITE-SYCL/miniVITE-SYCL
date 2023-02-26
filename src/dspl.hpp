@@ -359,6 +359,7 @@ void distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const std::
                                  std::map<GraphElem,Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
                                  std::vector<GraphWeight> &clusterWeight, const int me)
 {
+  // std::cout << "Dist Louvain Method Iteration" << std::endl;
   GraphElem localTarget = -1;
   GraphElem e0, e1, selfLoop = 0;
   std::unordered_map<GraphElem, GraphElem> clmap;
@@ -373,15 +374,15 @@ void distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const std::
 
   // Current Community is local
   if (cc >= base && cc < bound) {
-	ccDegree=localCinfo[cc-base].degree;
-        ccSize=localCinfo[cc-base].size;
-        currCommIsLocal=true;
+	  ccDegree=localCinfo[cc-base].degree;
+    ccSize=localCinfo[cc-base].size;
+    currCommIsLocal=true;
   } else {
   // is remote
-        std::map<GraphElem,Comm>::const_iterator citer = remoteCinfo.find(cc);
-	ccDegree = citer->second.degree;
- 	ccSize = citer->second.size;
-	currCommIsLocal=false;
+    std::map<GraphElem,Comm>::const_iterator citer = remoteCinfo.find(cc);
+	  ccDegree = citer->second.degree;
+ 	  ccSize = citer->second.size;
+	  currCommIsLocal=false;
   }
 
   dg.edge_range(i, e0, e1);
@@ -409,20 +410,20 @@ void distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const std::
   if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
         
 #ifdef DEBUG_PRINTF  
-        assert( base < localTarget < bound);
-        assert( base < cc < bound);
-	assert( cc - base < localCupdate.size()); 	
-	assert( localTarget - base < localCupdate.size()); 	
+    assert( base < localTarget < bound);
+    assert( base < cc < bound);
+	  assert( cc - base < localCupdate.size()); 	
+	  assert( localTarget - base < localCupdate.size()); 	
 #endif
-        #pragma omp atomic update
-        localCupdate[localTarget-base].degree += vDegree[i];
-        #pragma omp atomic update
-        localCupdate[localTarget-base].size++;
-        #pragma omp atomic update
-        localCupdate[cc-base].degree -= vDegree[i];
-        #pragma omp atomic update
-        localCupdate[cc-base].size--;
-     }	
+    #pragma omp atomic update
+    localCupdate[localTarget-base].degree += vDegree[i];
+    #pragma omp atomic update
+    localCupdate[localTarget-base].size++;
+    #pragma omp atomic update
+    localCupdate[cc-base].degree -= vDegree[i];
+    #pragma omp atomic update
+    localCupdate[cc-base].size--;
+  }	
 
   // current is local, target is not - do atomic on local, accumulate in Maps for remote
   if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
@@ -506,28 +507,63 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm> &localCinfo,
 
   GraphWeight *_le_xx = sycl::malloc_host<GraphWeight>(1, q);
   GraphWeight *_la2_x = sycl::malloc_host<GraphWeight>(1, q);
-  *_le_xx = 0;
-  *_la2_x = 0;
+  *_le_xx = le_xx;
+  *_la2_x = la2_x;
 
   // NOTE: The order of the arguments matters for the parallel_for lambda
   // This order corresponds to the order of the reductions
+
   int local_group_size = 4;
   q.submit([&](sycl::handler &h){
-    h.parallel_for(sycl::nd_range<1>{nv, local_group_size},
-                   sycl::reduction( _la2_x, std::plus<>()),
-                   sycl::reduction(_le_xx, std::plus<>()),
-                   [=](sycl::nd_item<1> it, auto &_la2_x, auto &_le_xx){
-                      int i = it.get_global_id(0);
-                      _le_xx += _clusterWeight[i];
-                      _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
-                   });
-  }).wait();
+    h.parallel_for(
+      sycl::nd_range<1>{nv, local_group_size},
+      sycl::reduction(_le_xx, std::plus<>()),
+      [=](sycl::nd_item<1> it, auto &_le_xx){
+        int i = it.get_global_id(0);
+        _le_xx += _clusterWeight[i];
+    });
+  });
+
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(
+      sycl::nd_range<1>{nv, local_group_size},
+      sycl::reduction(_la2_x, std::plus<>()),
+      [=](sycl::nd_item<1> it, auto &_la2_x){
+        int i = it.get_global_id(0);
+        _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
+    });
+  });
+
+  q.wait();
+
+  // BUG: The double reduction below doesn't work for some reason?
+  // Reproduce issue -> mpirun -n 4 ./miniVITE-SYCL -n 100
+  // This doesn't manifest with MPI np=1, or another value (I think)
+  // This issues doesn't manifest when local_group_size=1 (only value tested)
+  // ==> It's possible that the issue still exists in the above fix attempt, but doesn't manifest in that specific program scenario
+
+  // q.submit([&](sycl::handler &h){
+  //   h.parallel_for(sycl::nd_range<1>{nv, local_group_size},
+  //                  sycl::reduction(_le_xx, std::plus<>()),
+  //                  sycl::reduction(_la2_x, std::plus<>()),
+  //                  [=](sycl::nd_item<1> it, auto &_le_xx, auto &_la2_x){
+  //                     int i = it.get_global_id(0);
+  //                     _le_xx += _clusterWeight[i];
+  //                     // BUG: localCinfo is of type Comm, why are we casting to GraphWeight? Is this the correct thing
+  //                     _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
+  //                  });
+  // }).wait();
+
+  q.wait();
 
   le_xx = *_le_xx;
   la2_x = *_la2_x;
 
   le_la_xx[0] = le_xx;
   le_la_xx[1] = la2_x;
+
+  sycl::free(_le_xx, q);
+  sycl::free(_la2_x, q);
 
 #ifdef DEBUG_PRINTF  
   const double t0 = MPI_Wtime();
@@ -884,7 +920,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 
   rtcsz = *_rtcsz;
   // SYCL Port End
-  std::cout << "End of SYCL Port" << std::endl;
+  // std::cout << "End of SYCL Port" << std::endl;
   MPI_Barrier(MPI_COMM_WORLD);
   
 
@@ -1561,7 +1597,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
             remoteCinfo, remoteComm, remoteCupdate);
 #endif
 
-    std::cout << "Executed fillRemoteCommunities(...) " << std::endl;
+    //std::cout "Executed fillRemoteCommunities(...) " << std::endl;
     MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef DEBUG_PRINTF  
@@ -1576,7 +1612,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 
     // Ported to SYCL
     distCleanCWandCU(nv, clusterWeight, localCupdate);
-
+    //std::cout "Cleaned CW and CU" << std::endl;
 
 // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
 // TODO: Get experience with atomics and locking and porting these from OpenMP to SYCL
@@ -1597,13 +1633,17 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
         }
     }
 
+
     // Ported to SYCL
+    //std::cout "distUpdateLocalCinfo" << std::endl;
     distUpdateLocalCinfo(localCinfo, localCupdate);
 
     // communicate remote communities (TODO: Need to port)
+    //std::cout "updateRemoteCommunities" << std::endl;
     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
 
     // compute modularity (TODO: Need to port)
+    //std::cout "Compute modularity" << std::endl;
     currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
 
     // exit criteria
@@ -1615,6 +1655,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
         prevMod = lower;
 
     // Define sycl USM constructs
+    //std::cout "Louvain method iteration cleanup" << std::endl;
     std::vector<GraphElem, vec_ge_alloc> usm_pastComm(pastComm.begin(), pastComm.end(), vec_ge_allocator);
     std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
     std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
@@ -1630,13 +1671,15 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
         _targetComm[i] = tmp;
       });
     }).wait();
-
+    
     // Update original STL containers
     std::memcpy(pastComm.data(), usm_pastComm.data(), usm_pastComm.size() * sizeof(GraphElem));
     std::memcpy(currComm.data(), usm_currComm.data(), usm_currComm.size() * sizeof(GraphElem));
     std::memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
 
   } // end of Louvain iteration
+
+  //std::cout "Louvain method exit for loop" << std::endl;
 
 #if defined(USE_MPI_RMA)
   MPI_Win_unlock_all(commwin);
@@ -1654,6 +1697,8 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
   localCupdate.clear();
   
   return prevMod;
+  //std::cout "Louvain method exit function" << std::endl;
+
 } // distLouvainMethod plain
 
 #endif // __DSPL
