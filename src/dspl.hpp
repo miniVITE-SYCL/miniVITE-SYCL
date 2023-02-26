@@ -354,7 +354,7 @@ GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, std
   return selfLoop;
 } // distBuildLocalMapCounter
 
-void distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const std::vector<GraphElem> &currComm,
+void omp_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std::vector<GraphElem> &currComm,
 				 std::vector<GraphElem> &targetComm, const std::vector<GraphWeight> &vDegree,
                                  std::vector<Comm> &localCinfo, std::vector<Comm> &localCupdate,
 				 const std::unordered_map<GraphElem, GraphElem> &remoteComm, 
@@ -363,128 +363,170 @@ void distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const std::
                                  std::vector<GraphWeight> &clusterWeight, const int me)
 {
   // std::cout << "Dist Louvain Method Iteration" << std::endl;
-  GraphElem localTarget = -1;
-  GraphElem e0, e1, selfLoop = 0;
-  std::unordered_map<GraphElem, GraphElem> clmap;
-  std::vector<GraphWeight> counter;
 
-  const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
-  const GraphElem cc = currComm[i];
-  GraphWeight ccDegree;
-  GraphElem ccSize;  
-  bool currCommIsLocal = false; 
-  bool targetCommIsLocal = false;
+  // Updates
+  // - ccDegree
+  // - clusterWeight[i]
 
-  // Current Community is local
-  if (cc >= base && cc < bound) {
-	  ccDegree=localCinfo[cc-base].degree;
-    ccSize=localCinfo[cc-base].size;
-    currCommIsLocal=true;
-  } else {
-  // is remote
-    std::map<GraphElem,Comm>::const_iterator citer = remoteCinfo.find(cc);
-	  ccDegree = citer->second.degree;
- 	  ccSize = citer->second.size;
-	  currCommIsLocal=false;
-  }
+  // Usage
+  //  - localCinfo[i]
+  //  - currComm[i]
+  //  - dg->get_base, dg->get_bound
+  //  - remoteCinfo->find() + iteration
+  //  - remoteCupdate->find() + iteration
+  //  - counter.push_back();
 
-  dg.edge_range(i, e0, e1);
+  // NOTE: We can split up this code into serial + SYCL parallelized 
+  // --> There is likely code here that cannot be SYCLized
 
-  if (e0 != e1) {
-    clmap.insert(std::unordered_map<GraphElem, GraphElem>::value_type(cc, 0));
-    counter.push_back(0.0);
+  #pragma omp parallel default(shared), shared(clusterWeight, localCupdate, currComm, targetComm, \
+        vDegree, localCinfo, remoteCinfo, remoteComm, dg, remoteCupdate), \
+        firstprivate(constantForSecondTerm, me)
+  {
 
-    selfLoop =  distBuildLocalMapCounter(e0, e1, clmap, counter, dg, 
-                    currComm, remoteComm, i, base, bound);
+    #pragma omp for schedule(guided) 
+    for (GraphElem i = 0; i < nv; i++) {
 
-    clusterWeight[i] += counter[0];
+      GraphElem localTarget = -1;
+      GraphElem e0, e1, selfLoop = 0;
+      std::unordered_map<GraphElem, GraphElem> clmap;
+      std::vector<GraphWeight> counter;
 
-    localTarget = distGetMaxIndex(clmap, counter, selfLoop, localCinfo, remoteCinfo, 
-                    vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
-  }
-  else
-    localTarget = cc;
+      const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
+      const GraphElem cc = currComm[i];
+      GraphWeight ccDegree;
+      GraphElem ccSize;  
+      bool currCommIsLocal = false; 
+      bool targetCommIsLocal = false;
 
-   // is the Target Local?
-   if (localTarget >= base && localTarget < bound)
-      targetCommIsLocal = true;
-  
-  // current and target comm are local - atomic updates to vectors
-  if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
-        
-#ifdef DEBUG_PRINTF  
-    assert( base < localTarget < bound);
-    assert( base < cc < bound);
-	  assert( cc - base < localCupdate.size()); 	
-	  assert( localTarget - base < localCupdate.size()); 	
-#endif
-    #pragma omp atomic update
-    localCupdate[localTarget-base].degree += vDegree[i];
-    #pragma omp atomic update
-    localCupdate[localTarget-base].size++;
-    #pragma omp atomic update
-    localCupdate[cc-base].degree -= vDegree[i];
-    #pragma omp atomic update
-    localCupdate[cc-base].size--;
-  }	
+      // Current Community is local
+      if (cc >= base && cc < bound) {
+        ccDegree=localCinfo[cc-base].degree;
+        ccSize=localCinfo[cc-base].size;
+        currCommIsLocal=true;
+      } else {
+      // is remote
+        std::map<GraphElem,Comm>::const_iterator citer = remoteCinfo.find(cc);
+        ccDegree = citer->second.degree;
+        ccSize = citer->second.size;
+        currCommIsLocal=false;
+      }
 
-  // current is local, target is not - do atomic on local, accumulate in Maps for remote
-  if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
-        #pragma omp atomic update
-        localCupdate[cc-base].degree -= vDegree[i];
-        #pragma omp atomic update
-        localCupdate[cc-base].size--;
- 
-        // search target!     
-        std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(localTarget);
- 
-        #pragma omp atomic update
-        iter->second.degree += vDegree[i];
-        #pragma omp atomic update
-        iter->second.size++;
-  }
-        
-   // current is remote, target is local - accumulate for current, atomic on local
-   if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && targetCommIsLocal) {
+      dg.edge_range(i, e0, e1);
+
+      if (e0 != e1) {
+        clmap.insert(std::unordered_map<GraphElem, GraphElem>::value_type(cc, 0));
+        counter.push_back(0.0);
+
+        selfLoop =  distBuildLocalMapCounter(e0, e1, clmap, counter, dg, 
+                        currComm, remoteComm, i, base, bound);
+
+        clusterWeight[i] += counter[0];
+
+        localTarget = distGetMaxIndex(clmap, counter, selfLoop, localCinfo, remoteCinfo, 
+                        vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
+      }
+      else
+        localTarget = cc;
+
+      // is the Target Local?
+      if (localTarget >= base && localTarget < bound)
+          targetCommIsLocal = true;
+      
+      // current and target comm are local - atomic updates to vectors
+      if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
+            
+    #ifdef DEBUG_PRINTF  
+        assert( base < localTarget < bound);
+        assert( base < cc < bound);
+        assert( cc - base < localCupdate.size()); 	
+        assert( localTarget - base < localCupdate.size()); 	
+    #endif
         #pragma omp atomic update
         localCupdate[localTarget-base].degree += vDegree[i];
         #pragma omp atomic update
         localCupdate[localTarget-base].size++;
-       
-        // search current 
-        std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(cc);
-  
         #pragma omp atomic update
-        iter->second.degree -= vDegree[i];
+        localCupdate[cc-base].degree -= vDegree[i];
         #pragma omp atomic update
-        iter->second.size--;
-   }
-                    
-   // current and target are remote - accumulate for both
-   if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
-       
-        // search current 
-        std::map<GraphElem,Comm>::iterator iter = remoteCupdate.find(cc);
-  
-        #pragma omp atomic update
-        iter->second.degree -= vDegree[i];
-        #pragma omp atomic update
-        iter->second.size--;
-   
-        // search target
-        iter=remoteCupdate.find(localTarget);
-  
-        #pragma omp atomic update
-        iter->second.degree += vDegree[i];
-        #pragma omp atomic update
-        iter->second.size++;
-   }
+        localCupdate[cc-base].size--;
+      }	
 
-#ifdef DEBUG_PRINTF  
-  assert(localTarget != -1);
-#endif
-  targetComm[i] = localTarget;
-} // distExecuteLouvainIteration
+      // current is local, target is not - do atomic on local, accumulate in Maps for remote
+      if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
+            #pragma omp atomic update
+            localCupdate[cc-base].degree -= vDegree[i];
+            #pragma omp atomic update
+            localCupdate[cc-base].size--;
+    
+            // search target!     
+            std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(localTarget);
+    
+            #pragma omp atomic update
+            iter->second.degree += vDegree[i];
+            #pragma omp atomic update
+            iter->second.size++;
+      }
+            
+      // current is remote, target is local - accumulate for current, atomic on local
+      if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && targetCommIsLocal) {
+            #pragma omp atomic update
+            localCupdate[localTarget-base].degree += vDegree[i];
+            #pragma omp atomic update
+            localCupdate[localTarget-base].size++;
+          
+            // search current 
+            std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(cc);
+      
+            #pragma omp atomic update
+            iter->second.degree -= vDegree[i];
+            #pragma omp atomic update
+            iter->second.size--;
+      }
+                        
+      // current and target are remote - accumulate for both
+      if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
+          
+            // search current 
+            std::map<GraphElem,Comm>::iterator iter = remoteCupdate.find(cc);
+      
+            #pragma omp atomic update
+            iter->second.degree -= vDegree[i];
+            #pragma omp atomic update
+            iter->second.size--;
+      
+            // search target
+            iter=remoteCupdate.find(localTarget);
+      
+            #pragma omp atomic update
+            iter->second.degree += vDegree[i];
+            #pragma omp atomic update
+            iter->second.size++;
+      }
+
+    #ifdef DEBUG_PRINTF  
+      assert(localTarget != -1);
+    #endif
+      targetComm[i] = localTarget;
+    }
+  }
+} // omp_distExecuteLouvainIteration
+
+
+void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const std::vector<GraphElem> &currComm,
+				                              std::vector<GraphElem> &targetComm, const std::vector<GraphWeight> &vDegree,
+                                      std::vector<Comm> &localCinfo, std::vector<Comm> &localCupdate,
+				                              const std::unordered_map<GraphElem, GraphElem> &remoteComm, 
+                                      const std::map<GraphElem,Comm> &remoteCinfo, 
+                                      std::map<GraphElem,Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
+                                      std::vector<GraphWeight> &clusterWeight, const int me){
+
+    // Function
+    // - This is executed for each vertex
+
+
+}
+
 
 GraphWeight distComputeModularity(const Graph &g, std::vector<Comm> &localCinfo,
 			     const std::vector<GraphWeight> &clusterWeight,
@@ -1620,22 +1662,10 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 
 // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
 // TODO: Get experience with atomics and locking and porting these from OpenMP to SYCL
-#pragma omp parallel default(shared), shared(clusterWeight, localCupdate, currComm, targetComm, \
-        vDegree, localCinfo, remoteCinfo, remoteComm, pastComm, dg, remoteCupdate), \
-        firstprivate(constantForSecondTerm, me)
-    {
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp for schedule(runtime)
-#else
-#pragma omp for schedule(guided) 
-#endif
-        for (GraphElem i = 0; i < nv; i++) {
-            distExecuteLouvainIteration(i, dg, currComm, targetComm, vDegree, localCinfo, 
-                    localCupdate, remoteComm, remoteCinfo, remoteCupdate,
-                    constantForSecondTerm, clusterWeight, me);
-        }
-    }
+    omp_distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
+            localCupdate, remoteComm, remoteCinfo, remoteCupdate,
+            constantForSecondTerm, clusterWeight, me);
 
 
     // Ported to SYCL
