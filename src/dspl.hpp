@@ -1220,18 +1220,20 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
 
 
   // Ported to SYCL
-  std::vector<GraphElem, vec_ge_alloc> usm_send_sz(send_sz.begin(), send_sz.end(), vec_ge_allocator);
-  std::vector<std::vector<CommInfo>, vec_vec_commi_alloc> usm_remoteArray(remoteArray.begin(), remoteArray.end(), vec_vec_commi_allocator);
-  auto _send_sz = usm_send_sz.data();
-  auto _remoteArray = usm_remoteArray.data();
-  q.submit([&](sycl::handler &h){
-    h.parallel_for(nprocs, [=](sycl::id<1> i){
-      _send_sz[i] = _remoteArray[i].size();
-    });
-  }).wait();
+  {
+    std::vector<GraphElem, vec_ge_alloc> usm_send_sz(send_sz.begin(), send_sz.end(), vec_ge_allocator);
+    std::vector<std::vector<CommInfo>, vec_vec_commi_alloc> usm_remoteArray(remoteArray.begin(), remoteArray.end(), vec_vec_commi_allocator);
+    auto _send_sz = usm_send_sz.data();
+    auto _remoteArray = usm_remoteArray.data();
+    q.submit([&](sycl::handler &h){
+      h.parallel_for(nprocs, [=](sycl::id<1> i){
+        _send_sz[i] = _remoteArray[i].size();
+      });
+    }).wait();
 
-  std::memcpy(send_sz.data(), usm_send_sz.data(), usm_send_sz.size() *sizeof(GraphElem));
-  // End of Port
+    std::memcpy(send_sz.data(), usm_send_sz.data(), usm_send_sz.size() *sizeof(GraphElem));
+    // End of Port
+  }
 
 
   MPI_Alltoall(send_sz.data(), 1, MPI_GRAPH_TYPE, recv_sz.data(), 
@@ -1243,19 +1245,49 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
 #endif
 
   GraphElem rcnt = 0, scnt = 0;
+  auto _rcnt = sycl::malloc_host<GraphElem>(1, q);
+  auto _scnt = sycl::malloc_host<GraphElem>(1, q);
+  
+  *_scnt = scnt;
+  *_rcnt = rcnt;
 
+  // Porting to SYCL
+  {
+    int local_group_size = 4;
+    std::vector<GraphElem, vec_ge_alloc> usm_recv_sz(recv_sz.begin(), recv_sz.end(), vec_ge_allocator);
+    std::vector<GraphElem, vec_ge_alloc> usm_send_sz(send_sz.begin(), send_sz.end(), vec_ge_allocator);
+    auto _send_sz = usm_send_sz.data();
+    auto _recv_sz = usm_recv_sz.data();
 
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp parallel for shared(recv_sz, send_sz) \
-  reduction(+:rcnt, scnt) schedule(runtime)
-#else
-#pragma omp parallel for shared(recv_sz, send_sz) \
-  reduction(+:rcnt, scnt) schedule(static)
-#endif
-  for (int i = 0; i < nprocs; i++) {
-    rcnt += recv_sz[i];
-    scnt += send_sz[i];
+    q.submit([&](sycl::handler &h){
+      h.parallel_for(
+          sycl::nd_range<1>{nprocs, local_group_size},
+          sycl::reduction(_rcnt, std::plus<>()),
+          [=](sycl::nd_item<1> it, auto& _rcnt) {
+            int i = it.get_global_id(0);
+            _rcnt += _recv_sz[i];
+      });
+    });
+
+    q.submit([&](sycl::handler &h){
+      h.parallel_for(
+          sycl::nd_range<1>{nprocs, local_group_size},
+          sycl::reduction(_scnt, std::plus<>()),
+          [=](sycl::nd_item<1> it, auto& _scnt) {
+            int i = it.get_global_id(0);
+            _scnt += _send_sz[i];
+      });
+    });
+
+    q.wait();
   }
+
+
+  scnt = *_scnt;
+  rcnt = *_rcnt;
+
+  // End of Port
+
 #ifdef DEBUG_PRINTF  
   std::cout << "[" << me << "]Total number of remote communities to update: " << scnt << std::endl;
 #endif
