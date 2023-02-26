@@ -82,11 +82,13 @@ static MPI_Datatype commType;
 // We define USM STL allocators
 typedef sycl::usm_allocator<GraphWeight, sycl::usm::alloc::shared> vec_gw_alloc;
 typedef sycl::usm_allocator<GraphElem, sycl::usm::alloc::shared> vec_ge_alloc;
+typedef sycl::usm_allocator<bool, sycl::usm::alloc::shared> vec_bool_alloc;
 typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
 typedef sycl::usm_allocator<CommInfo, sycl::usm::alloc::shared> vec_commi_alloc;
 typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
 typedef sycl::usm_allocator<int, sycl::usm::alloc::shared> vec_int_alloc;
 typedef sycl::usm_allocator<vec_ge_alloc, sycl::usm::alloc::shared> vec_vec_ge_alloc;
+typedef sycl::usm_allocator<vec_bool_alloc, sycl::usm::alloc::shared> vec_vec_bool_alloc;
 typedef sycl::usm_allocator<std::unordered_set<GraphElem>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 // typedef sycl::usm_allocator<std::unordered_set<GraphElem, vec_ge_alloc>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 
@@ -102,6 +104,7 @@ vec_vec_commi_alloc vec_vec_commi_allocator(q);
 vec_int_alloc vec_int_allocator(q);
 vec_vec_ge_alloc vec_vec_ge_allocator(q);
 vec_uset_ge_alloc vec_uset_ge_allocator(q);
+vec_vec_bool_alloc vec_vec_bool_allocator(q);
 
 
 void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
@@ -1375,56 +1378,27 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
   const GraphElem nv = dg.get_lnv();
   MPI_Comm gcomm = dg.get_comm();
 
-#ifdef USE_OPENMP_LOCK
-  std::vector<omp_lock_t> locks(nprocs);
-  for (int i = 0; i < nprocs; i++)
-    omp_init_lock(&locks[i]);
-#endif
   std::vector<std::unordered_set<GraphElem>> parray(nprocs);
 
-#ifdef USE_OPENMP_LOCK
-#pragma omp parallel default(shared), shared(dg, locks, parray), firstprivate(me)
-#else
-#pragma omp parallel default(shared), shared(dg, parray), firstprivate(me)
-#endif
-  {
-#ifdef OMP_SCHEDULE_RUNTIME
-#pragma omp for schedule(runtime)
-#else
-#pragma omp for schedule(guided)
-#endif
-    for (GraphElem i = 0; i < nv; i++) {
-      GraphElem e0, e1;
+  // TODO: Did not port the below into SYCL
+  // If there is time, we'll attempt to play around with a parallelized version
+  // It seems that for CPU, the below is faster than any workaround we come up with
+  for (GraphElem i = 0; i < nv; i++) {
+    GraphElem e0, e1;
 
-      dg.edge_range(i, e0, e1);
+    dg.edge_range(i, e0, e1);
 
-      for (GraphElem j = e0; j < e1; j++) {
-	const Edge &edge = dg.get_edge(j);
-	const int tproc = dg.get_owner(edge.tail_);
+    for (GraphElem j = e0; j < e1; j++) {
+      const Edge &edge = dg.get_edge(j);
+      const int tproc = dg.get_owner(edge.tail_);
 
-	if (tproc != me) {
-#ifdef USE_OPENMP_LOCK
-	  omp_set_lock(&locks[tproc]);
-#else
-          lock();
-#endif
-	  parray[tproc].insert(edge.tail_);
-#ifdef USE_OPENMP_LOCK
-	  omp_unset_lock(&locks[tproc]);
-#else
-          unlock();
-#endif
-	}
+      if (tproc != me) {
+        parray[tproc].insert(edge.tail_);
       }
     }
   }
 
-#ifdef USE_OPENMP_LOCK
-  for (int i = 0; i < nprocs; i++) {
-    omp_destroy_lock(&locks[i]);
-  }
-#endif
-  
+
   rsizes.resize(nprocs);
   ssizes.resize(nprocs);
   ssz = 0, rsz = 0;
@@ -1442,7 +1416,6 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 
   GraphElem rsz_r = 0;
   
-  
   // SYCL Port
   std::vector<GraphElem, vec_ge_alloc> usm_rsizes(rsizes.begin(), rsizes.end(), vec_ge_allocator);
   GraphElem *_rsz_r = sycl::malloc_host<GraphElem>(1, q);
@@ -1458,7 +1431,6 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
                     _rsz_r += _rsizes[i];
                   });
   }).wait();
-
 
   rsz_r = *_rsz_r;
   rsz = rsz_r;
