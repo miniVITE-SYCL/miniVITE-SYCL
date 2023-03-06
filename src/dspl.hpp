@@ -107,7 +107,8 @@ vec_uset_ge_alloc vec_uset_ge_allocator(q);
 vec_vec_bool_alloc vec_vec_bool_allocator(q);
 
 
-void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
+void 
+(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
 {
 
   // we then create pointers to the underlying data
@@ -521,10 +522,172 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
                                       std::map<GraphElem,Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
                                       std::vector<GraphWeight> &clusterWeight, const int me){
 
-    // Function
-    // - This is executed for each vertex
+  // USM allocation for std::vectors
+  std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
+  std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
+  std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.begin(), vDegree.end(), vec_gw_allocator);
+  // NOTE: `localCinfo` and `localCupdate` both use vectors, so why can't `remoteCinfo` and `remoteCupdate`
+  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCupdate.end(), vec_comm_allocator);
+  std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
+  // remaining vectors ...
+  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_ge_allocator);
+
+  // Access to underlying memory blocks for vectors
+  auto _currComm = usm_currComm.data();
+  auto _targetComm = usm_targetComm.data();
+  auto _vDegree = usm_vDegree.data();
+  auto _localCinfo = usm_localCinfo.data();
+  auto _localCupdate = usm_localCupdate.data();
+  auto _clusterWeight = usm_clusterWeight.data();
+
+  // create private copies (Is it nececssary?)
+  const Graph *_dg = &dg;
+
+  // TODO: Port the following thread-public maps
+  // std::unordered_map<GraphElem, GraphElem> remoteComm
+  // std::unordered_map<GraphElem, Comm> remoteCinfo
+  // std::unordered_map<GraphElem, Comm> remoteCupdate
 
 
+
+
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(nv, [=](sycl::id<1> i){
+      GraphElem localTarget = -1;
+      GraphElem e0, e1, selfLoop = 0;
+      
+      // OPTIMIZE MEMORY: We can reduce this from O(V) to a tighter Max(largest_neighborhood)
+      // --> Otherwise, this wastes memory if there are not a lot of edges!
+      int max_neighbors = nv;
+
+      // NOTE: Do I need to use the usm allocator for thread-private
+      std::vector<GraphWeight> counter(max_neighbors, 0.0);
+
+      // TODO: Need to port over
+      // std::unordered_map<GraphElem, GraphElem> clmap;
+
+      const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
+      const GraphElem cc = _currComm[i];
+      GraphWeight ccDegree;
+      GraphElem ccSize;  
+      bool currCommIsLocal = false; 
+      bool targetCommIsLocal = false;
+
+      // create atomic references (replaces #omp pragma atomic update)
+      sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> localTarget_base_degree(_localCupdate[localTarget-base].degree);
+      sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> localTarget_base_size(_localCupdate[localTarget-base].degree);
+      sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> cc_base_degree(_localCupdate[cc-base].degree);
+      sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> cc_base_size(_localCupdate[cc-base].size);
+          
+
+      // Current Community is local
+      if (cc >= base && cc < bound) {
+        ccDegree=_localCinfo[cc-base].degree;
+        ccSize=_localCinfo[cc-base].size;
+        currCommIsLocal=true;
+      } else {
+      // is remote
+        std::map<GraphElem,Comm>::const_iterator citer = remoteCinfo.find(cc);
+        ccDegree = citer->second.degree;
+        ccSize = citer->second.size;
+        currCommIsLocal=false;
+      }
+
+      dg.edge_range(i, e0, e1);
+
+      if (e0 != e1) {
+        clmap.insert(std::unordered_map<GraphElem, GraphElem>::value_type(cc, 0));
+        counter.push_back(0.0);
+
+        selfLoop =  distBuildLocalMapCounter(e0, e1, clmap, counter, dg, 
+                        currComm, remoteComm, i, base, bound);
+
+        clusterWeight[i] += counter[0];
+
+        localTarget = distGetMaxIndex(clmap, counter, selfLoop, _localCinfo, remoteCinfo, 
+                        vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
+      }
+      else
+        localTarget = cc;
+
+      // is the Target Local?
+      if (localTarget >= base && localTarget < bound)
+          targetCommIsLocal = true;
+      
+
+      // current and target comm are local - atomic updates to vectors
+      if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
+        #ifdef DEBUG_PRINTF  
+        assert( base < localTarget < bound);
+        assert( base < cc < bound);
+        assert( cc - base < _localCupdate.size()); 	
+        assert( localTarget - base < _localCupdate.size()); 	
+        #endif
+
+        localTarget_base_degree += vDegree[i];
+        localTarget_base_size++;
+        cc_base_degree -= vDegree[i];
+        cc_base_size--;
+      }	
+
+      // current is local, target is not - do atomic on local, accumulate in Maps for remote
+      if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
+            cc_base_degree -= vDegree[i];
+            cc_base_size--;
+    
+            // search target!     
+            std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(localTarget);
+    
+            #pragma omp atomic update
+            iter->second.degree += vDegree[i];
+            #pragma omp atomic update
+            iter->second.size++;
+      }
+            
+      // current is remote, target is local - accumulate for current, atomic on local
+      if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && targetCommIsLocal) {
+            localTarget_base_degree += vDegree[i];
+            localTarget_base_size++;
+          
+            // search current 
+            std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(cc);
+      
+            #pragma omp atomic update
+            iter->second.degree -= vDegree[i];
+            #pragma omp atomic update
+            iter->second.size--;
+      }
+                        
+      // current and target are remote - accumulate for both
+      if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
+            // search current 
+            std::map<GraphElem,Comm>::iterator iter = remoteCupdate.find(cc);
+      
+            #pragma omp atomic update
+            iter->second.degree -= vDegree[i];
+            #pragma omp atomic update
+            iter->second.size--;
+      
+            // search target
+            iter=remoteCupdate.find(localTarget);
+      
+            #pragma omp atomic update
+            iter->second.degree += vDegree[i];
+            #pragma omp atomic update
+            iter->second.size++;
+      }
+
+      #ifdef DEBUG_PRINTF  
+      assert(localTarget != -1);
+      #endif
+      targetComm[i] = localTarget;
+
+    }).wait();
+
+  });
+  
+  // TODO: Copying of data + cleanup!!
+  // ...
 }
 
 
