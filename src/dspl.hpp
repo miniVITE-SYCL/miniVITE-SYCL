@@ -253,13 +253,19 @@ void distInitLouvain(const Graph &dg, std::vector<GraphElem> &pastComm,
 
 } // distInitLouvain
 
-GraphElem distGetMaxIndex(const std::unordered_map<GraphElem, GraphElem> &clmap, const std::vector<GraphWeight> &counter,
-			  const GraphWeight selfLoop, const std::vector<Comm> &localCinfo, 
-			  const std::map<GraphElem,Comm> &remoteCinfo, const GraphWeight vDegree, 
-                          const GraphElem currSize, const GraphWeight currDegree, const GraphElem currComm,
-			  const GraphElem base, const GraphElem bound, const GraphWeight constant)
+GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap, 
+                              const std::vector<GraphWeight> &counter,
+			                        const GraphWeight selfLoop, 
+                              const std::vector<Comm> &localCinfo, 
+			                        const std::vector<Comm> &remoteCinfo, 
+                              const GraphWeight vDegree, 
+                              const GraphElem currSize, 
+                              const GraphWeight currDegree, 
+                              const GraphElem currComm,
+			                        const GraphElem base, 
+                              const GraphElem bound, 
+                              const GraphWeight constant)
 {
-  std::unordered_map<GraphElem, GraphElem>::const_iterator storedAlready;
   GraphElem maxIndex = currComm;
   GraphWeight curGain = 0.0, maxGain = 0.0;
   GraphWeight eix = static_cast<GraphWeight>(counter[0]) - static_cast<GraphWeight>(selfLoop);
@@ -270,38 +276,39 @@ GraphElem distGetMaxIndex(const std::unordered_map<GraphElem, GraphElem> &clmap,
   GraphElem maxSize = currSize; 
   GraphElem size = 0;
 
-  storedAlready = clmap.begin();
+  auto iter = clmap.begin();
 #ifdef DEBUG_PRINTF  
-  assert(storedAlready != clmap.end());
+  assert(iter != clmap.end());
 #endif
   do {
-      if (currComm != storedAlready->first) {
+      auto storedAlready = *iter
+      if (currComm != storedAlready) {
 
           // is_local, direct access local info
-          if ((storedAlready->first >= base) && (storedAlready->first < bound)) {
-              ay = localCinfo[storedAlready->first-base].degree;
-              size = localCinfo[storedAlready->first - base].size;   
+          if ((storedAlready >= base) && (storedAlready < bound)) {
+              ay = localCinfo[storedAlready-base].degree;
+              size = localCinfo[storedAlready - base].size;   
           }
           else {
               // is_remote, lookup map
-              std::map<GraphElem,Comm>::const_iterator citer = remoteCinfo.find(storedAlready->first);
-              ay = citer->second.degree;
-              size = citer->second.size; 
+              Comm remote_comm = remoteCinfo[storedAlready];
+              ay = remote_comm.degree;
+              size = remote_comm.size; 
           }
 
-          eiy = counter[storedAlready->second];
+          eiy = counter[storedAlreadyf];
 
           curGain = 2.0 * (eiy - eix) - 2.0 * vDegree * (ay - ax) * constant;
 
           if ((curGain > maxGain) ||
-                  ((curGain == maxGain) && (curGain != 0.0) && (storedAlready->first < maxIndex))) {
+                  ((curGain == maxGain) && (curGain != 0.0) && (storedAlready < maxIndex))) {
               maxGain = curGain;
-              maxIndex = storedAlready->first;
+              maxIndex = storedAlready;
               maxSize = size;
           }
       }
-      storedAlready++;
-  } while (storedAlready != clmap.end());
+      iter++;
+  } while (iter != clmap.end());
 
   if ((maxSize == 1) && (currSize == 1) && (maxIndex > currComm))
     maxIndex = currComm;
@@ -309,18 +316,17 @@ GraphElem distGetMaxIndex(const std::unordered_map<GraphElem, GraphElem> &clmap,
   return maxIndex;
 } // distGetMaxIndex
 
-GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, std::unordered_map<GraphElem, GraphElem> &clmap, 
-				   std::vector<GraphWeight> &counter, const Graph &g, 
-                                   const std::vector<GraphElem> &currComm, 
-                                   const std::unordered_map<GraphElem, GraphElem> &remoteComm,
-	                           const GraphElem vertex, const GraphElem base, const GraphElem bound)
+GraphWeight sycl_distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
+                                    std::vector<GraphElem> &clmap, GraphElem &counter_size,
+				                            std::vector<GraphWeight> &counter, const Graph &g, 
+                                    const std::vector<GraphElem> &currComm, 
+                                    const std::vector<GraphElem> &remoteComm,
+	                                  const GraphElem vertex, const GraphElem base, const GraphElem bound)
 {
   GraphElem numUniqueClusters = 1L;
   GraphWeight selfLoop = 0;
-  std::unordered_map<GraphElem, GraphElem>::const_iterator storedAlready;
 
   for (GraphElem j = e0; j < e1; j++) {
-        
     const Edge &edge = g.get_edge(j);
     const GraphElem &tail_ = edge.tail_;
     const GraphWeight &weight = edge.weight_;
@@ -333,21 +339,21 @@ GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, std
     if ((tail_ >= base) && (tail_ < bound))
       tcomm = currComm[tail_ - base];
     else { // is_remote, lookup map
-      std::unordered_map<GraphElem, GraphElem>::const_iterator iter = remoteComm.find(tail_);
+      auto tcomm = remoteComm[tail_];
 
 #ifdef DEBUG_PRINTF  
-      assert(iter != remoteComm.end());
+      assert(tcomm != -1); // -1 means not there in the vector - (remoteComm has been replaced with a vector from a unordered_map)
 #endif
-      tcomm = iter->second;
     }
 
-    storedAlready = clmap.find(tcomm);
+    auto storedAlready = clmap[tcomm];
     
-    if (storedAlready != clmap.end())
-      counter[storedAlready->second] += weight;
+    if (storedAlready != -1)
+      counter[storedAlready] += weight;
     else {
-        clmap.insert(std::unordered_map<GraphElem, GraphElem>::value_type(tcomm, numUniqueClusters));
-        counter.push_back(weight);
+        clmap[tcomm] = numUniqueClusters;
+        counter[counter_size] = weight;
+        counter_size++;
         numUniqueClusters++;
     }
   }
@@ -358,7 +364,7 @@ GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, std
 void omp_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std::vector<GraphElem> &currComm,
 				 std::vector<GraphElem> &targetComm, const std::vector<GraphWeight> &vDegree,
                                  std::vector<Comm> &localCinfo, std::vector<Comm> &localCupdate,
-				 const std::unordered_map<GraphElem, GraphElem> &remoteComm, 
+				 const std::vector<GraphElem> &remoteComm, 
                                  const std::map<GraphElem,Comm> &remoteCinfo, 
                                  std::map<GraphElem,Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
                                  std::vector<GraphWeight> &clusterWeight, const int me)
@@ -514,12 +520,12 @@ void omp_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const 
 } // omp_distExecuteLouvainIteration
 
 
-void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const std::vector<GraphElem> &currComm,
+void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std::vector<GraphElem> &currComm,
 				                              std::vector<GraphElem> &targetComm, const std::vector<GraphWeight> &vDegree,
                                       std::vector<Comm> &localCinfo, std::vector<Comm> &localCupdate,
-				                              const std::unordered_map<GraphElem, GraphElem> &remoteComm, 
-                                      const std::map<GraphElem,Comm> &remoteCinfo, 
-                                      std::map<GraphElem,Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
+				                              const std::vector<GraphElem> &remoteComm, 
+                                      const std::vector<Comm> &remoteCinfo, 
+                                      std::vector<Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
                                       std::vector<GraphWeight> &clusterWeight, const int me){
 
   // USM allocation for std::vectors
@@ -531,6 +537,9 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
   std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
   // remaining vectors ...
   std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_ge_allocator);
+  std::vector<GraphElem, ve_ge_alloc> usm_remoteComm(remoteComm.begin(), remoteComm.end(), vec_ge_allocator);
+  std::vector<Comm, ve_comm_alloc> usm_remoteCinfo(remoteCinfo.begin(), remoteCinfo.end(), ve_comm_allocator);
+  std::vector<Comm, ve_comm_alloc> usm_remoteCupdate(remoteCupdate.begin(), remoteCupdate.end(), ve_comm_allocator);
 
   // Access to underlying memory blocks for vectors
   auto _currComm = usm_currComm.data();
@@ -539,17 +548,17 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
   auto _localCinfo = usm_localCinfo.data();
   auto _localCupdate = usm_localCupdate.data();
   auto _clusterWeight = usm_clusterWeight.data();
+  auto _remoteComm = usm_remoteComm.data();
+  auto _remoteCinfo = usm_remoteCinfo.data();
+  auto _remoteCupdate = usm_remoteCupdate.data();
 
   // create private copies (Is it nececssary?)
   const Graph *_dg = &dg;
 
   // TODO: Port the following thread-public maps
-  // std::unordered_map<GraphElem, GraphElem> remoteComm
+  // std::unordered_map<GraphElem, GraphElem> remoteComm (x)
   // std::unordered_map<GraphElem, Comm> remoteCinfo
   // std::unordered_map<GraphElem, Comm> remoteCupdate
-
-
-
 
   q.submit([&](sycl::handler &h){
     h.parallel_for(nv, [=](sycl::id<1> i){
@@ -562,9 +571,10 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
 
       // NOTE: Do I need to use the usm allocator for thread-private
       std::vector<GraphWeight> counter(max_neighbors, 0.0);
+      GraphElem counter_size = 0;
 
-      // TODO: Need to port over
-      // std::unordered_map<GraphElem, GraphElem> clmap;
+      // TODO: Can we make this smaller? i.e. can this vector have a smaller size than (number of global edges?)
+      std::vector<GraphElem> clmap(_dg->get_ne(), -1); 
 
       const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
       const GraphElem cc = _currComm[i];
@@ -587,25 +597,29 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
         currCommIsLocal=true;
       } else {
       // is remote
-        std::map<GraphElem,Comm>::const_iterator citer = remoteCinfo.find(cc);
-        ccDegree = citer->second.degree;
-        ccSize = citer->second.size;
+        Comm comm = _remoteCinfo[cc];
+        ccDegree = comm.degree;
+        ccSize = comm.size;
         currCommIsLocal=false;
       }
 
       dg.edge_range(i, e0, e1);
 
       if (e0 != e1) {
-        clmap.insert(std::unordered_map<GraphElem, GraphElem>::value_type(cc, 0));
-        counter.push_back(0.0);
+        clmap[cc] = 0;
+        // NOTE: We might be able to use push_back if we use reserve instead??
+        // Otherwise, we'll have to create a length variable
+        // counter.push_back(0.0);
+        counter_size++;
 
-        selfLoop =  distBuildLocalMapCounter(e0, e1, clmap, counter, dg, 
-                        currComm, remoteComm, i, base, bound);
+        selfLoop =  sycl_distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
+                                                  _currComm, _remoteComm, i, base, bound);
 
-        clusterWeight[i] += counter[0];
+        _clusterWeight[i] += counter[0];
 
-        localTarget = distGetMaxIndex(clmap, counter, selfLoop, _localCinfo, remoteCinfo, 
-                        vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
+        localTarget = sycl_distGetMaxIndex(clmap, counter, selfLoop, _localCinfo, _remoteCinfo, 
+                        _vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
+        localTarget = 0;
       }
       else
         localTarget = cc;
@@ -614,6 +628,8 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
       if (localTarget >= base && localTarget < bound)
           targetCommIsLocal = true;
       
+      // TODO !!!
+      // This section requires `remoteCupdate` to be replaced from a map
 
       // current and target comm are local - atomic updates to vectors
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
@@ -624,24 +640,24 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
         assert( localTarget - base < _localCupdate.size()); 	
         #endif
 
-        localTarget_base_degree += vDegree[i];
+        localTarget_base_degree += _vDegree[i];
         localTarget_base_size++;
-        cc_base_degree -= vDegree[i];
+        cc_base_degree -= _vDegree[i];
         cc_base_size--;
       }	
 
       // current is local, target is not - do atomic on local, accumulate in Maps for remote
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
-            cc_base_degree -= vDegree[i];
+            cc_base_degree -= _vDegree[i];
             cc_base_size--;
     
-            // search target!     
-            std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(localTarget);
-    
-            #pragma omp atomic update
-            iter->second.degree += vDegree[i];
-            #pragma omp atomic update
-            iter->second.size++;
+            // search target!
+            Comm target_comm = _remoteCupdate[localTarget];
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> target_comm_size(target_comm.size);
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> target_comm_degree(target_comm.degree);
+            
+            target_comm_degree += _vDegree[i];
+            target_comm_size++;
       }
             
       // current is remote, target is local - accumulate for current, atomic on local
@@ -650,44 +666,48 @@ void sycl_distExecuteLouvainIteration(const GraphElem i, const Graph &dg, const 
             localTarget_base_size++;
           
             // search current 
-            std::map<GraphElem,Comm>::iterator iter=remoteCupdate.find(cc);
-      
-            #pragma omp atomic update
-            iter->second.degree -= vDegree[i];
-            #pragma omp atomic update
-            iter->second.size--;
+            Comm current_comm = _remoteCupdate[localTarget];
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> current_comm_size(current_comm.size);
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> current_comm_degree(current_comm.degree);
+            
+            current_comm_degree -= _vDegree[i];
+            current_comm_size--;
       }
                         
       // current and target are remote - accumulate for both
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
             // search current 
-            std::map<GraphElem,Comm>::iterator iter = remoteCupdate.find(cc);
-      
-            #pragma omp atomic update
-            iter->second.degree -= vDegree[i];
-            #pragma omp atomic update
-            iter->second.size--;
+            Comm current_comm = _remoteCupdate[localTarget];
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> current_comm_size(current_comm.size);
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> current_comm_degree(current_comm.degree);
+            
+            current_comm_degree -= _vDegree[i];
+            current_comm_size--;
       
             // search target
-            iter=remoteCupdate.find(localTarget);
-      
-            #pragma omp atomic update
-            iter->second.degree += vDegree[i];
-            #pragma omp atomic update
-            iter->second.size++;
+            Comm target_comm = _remoteCupdate[localTarget];
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> target_comm_size(target_comm.size);
+            sycl::atomic_ref<GraphElem, memory_order::relaxed, memory_scope::system, access::address_space::global_space> target_comm_degree(target_comm.degree);
+            
+            target_comm_degree += _vDegree[i];
+            target_com_size++;
       }
 
       #ifdef DEBUG_PRINTF  
       assert(localTarget != -1);
       #endif
-      targetComm[i] = localTarget;
+      _targetComm[i] = localTarget;
 
     }).wait();
 
   });
   
   // TODO: Copying of data + cleanup!!
-  // ...
+  // what data is modified
+  // - _targetComm
+  // - _localCupdate
+  // - _remoteCupdate
+  // -
 }
 
 
@@ -845,16 +865,16 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
         const size_t &ssz, const size_t &rsz, const std::vector<GraphElem> &ssizes, 
         const std::vector<GraphElem> &rsizes, const std::vector<GraphElem> &svdata, 
         const std::vector<GraphElem> &rvdata, const std::vector<GraphElem> &currComm, 
-        const std::vector<Comm> &localCinfo, std::map<GraphElem,Comm> &remoteCinfo, 
-        std::unordered_map<GraphElem, GraphElem> &remoteComm, std::map<GraphElem,Comm> &remoteCupdate, 
+        const std::vector<Comm> &localCinfo, std::vector<Comm> &remoteCinfo, 
+        std::vector<GraphElem> &remoteComm, std::vector<Comm> &remoteCupdate, 
         const MPI_Win &commwin, const std::vector<GraphElem> &disp)
 #else
 void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
         const size_t &ssz, const size_t &rsz, const std::vector<GraphElem> &ssizes, 
         const std::vector<GraphElem> &rsizes, const std::vector<GraphElem> &svdata, 
         const std::vector<GraphElem> &rvdata, const std::vector<GraphElem> &currComm, 
-        const std::vector<Comm> &localCinfo, std::map<GraphElem,Comm> &remoteCinfo, 
-        std::unordered_map<GraphElem, GraphElem> &remoteComm, std::map<GraphElem,Comm> &remoteCupdate)
+        const std::vector<Comm> &localCinfo, std::vector<Comm> &remoteCinfo, 
+        std::vector<GraphElem> &remoteComm, std::vector<Comm> &remoteCupdate)
 #endif
 {
 #if defined(USE_MPI_RMA)
@@ -1031,7 +1051,12 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   MPI_Win_get_attr(commwin, MPI_WIN_BASE, &rcbuf, &flag);
 #endif
 
+  
+  Graph ne = dg.get_ne();
   remoteComm.clear();
+  remoteComm.resize(ne, -1); // the size of rvdata should be number of edges. it's possible we have missing comms stored here, so they have default -1
+
+
   for (GraphElem i = 0; i < rpos; i++) {
 
 #if defined(USE_MPI_RMA)
@@ -1039,8 +1064,8 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 #else
     const GraphElem comm = rcdata[i];
 #endif
-
-    remoteComm.insert(std::unordered_map<GraphElem, GraphElem>::value_type(rvdata[i], comm));
+    // rvdata has size of the incident vertices (rsz)
+    remoteComm[rvdata[i]] = comm;
     const int tproc = dg.get_owner(comm);
 
     if (tproc != me)
@@ -1353,6 +1378,11 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 
   remoteCinfo.clear();
   remoteCupdate.clear();
+  // TODO: Resize these appropriately - What is it storing as the key here?
+  // How should I define non-existent / "null" elements ? For GraphElem containers, it was -1. Here maybe comm.size (GraphElem) == -1?
+  // NOTE: I believe it should be number of vertices - i.e. the largest number of comms is when num_vertices = num_communities
+  remoteCinfo.resize(g.get_nv(), Comm(-1, 0.0));
+  remoteCupdate.resize(g.get_nv(), Comm(-1, 0.0));
 
   for (GraphElem i = 0; i < stcsz; i++) {
       const GraphElem ccomm = rinfo[i].community;
@@ -1362,8 +1392,8 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
       comm.size = rinfo[i].size;
       comm.degree = rinfo[i].degree;
 
-      remoteCinfo.insert(std::map<GraphElem,Comm>::value_type(ccomm, comm));
-      remoteCupdate.insert(std::map<GraphElem,Comm>::value_type(ccomm, Comm()));
+      remoteCinfo[ccomm] = comm;
+      remoteCupdate[ccomm] = Comm();
   }
 } // end fillRemoteCommunities
 
@@ -1392,7 +1422,7 @@ void destroyCommunityMPIType()
 } // destroyCommunityMPIType
 
 void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
-			     const std::map<GraphElem,Comm> &remoteCupdate,
+			     const std::vector<Comm> &remoteCupdate,
 			     const int me, const int nprocs)
 {
   const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
@@ -1733,7 +1763,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
   std::vector<GraphWeight> clusterWeight;
   std::vector<Comm> localCinfo, localCupdate;
  
-  std::unordered_map<GraphElem, GraphElem> remoteComm;
+  std::vector<GraphElem> remoteComm;
   std::map<GraphElem,Comm> remoteCinfo, remoteCupdate;
   
   const GraphElem nv = dg.get_lnv();
@@ -1812,6 +1842,8 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 #ifdef DEBUG_PRINTF  
     t1 = MPI_Wtime();
     std::cout << "[" << me << "]Remote community map size: " << remoteComm.size() << std::endl;
+    assert (false) // NOTE: remoteComm.size() is no longer the community map size! This is because instead of a map with elements, it is a sparse array!
+    // TODO: In order to caluclate the remote community size, please iterate over the list, and count the number of non-negative values
     std::cout << "[" << me << "]Iteration communication time: " << (t1 - t0) << std::endl;
 #endif
 
