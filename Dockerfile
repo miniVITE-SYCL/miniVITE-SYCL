@@ -1,7 +1,6 @@
 FROM intel/oneapi-hpckit
 RUN apt-get update -yy
-RUN apt-get install vim -yy
-
+RUN apt-get install vim gdb valgrind -yy
 ## No copying of source files is performed
 ## During dev, I prefer to mount my own directories
 
