@@ -256,8 +256,8 @@ void distInitLouvain(const Graph &dg, std::vector<GraphElem> &pastComm,
 GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap, 
                               const std::vector<GraphWeight> &counter,
 			                        const GraphWeight selfLoop, 
-                              const Comm *localCinfo, 
-			                        const Comm *remoteCinfo, 
+                              const Comm localCinfo[], 
+			                        const Comm remoteCinfo[], 
                               const GraphWeight vDegree, 
                               const GraphElem currSize, 
                               const GraphWeight currDegree, 
@@ -281,8 +281,9 @@ GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap,
   assert(iter != clmap.end());
 #endif
   do {
-      auto storedAlready = *iter;
-      if (currComm != storedAlready) {
+      GraphElem storedAlready = *iter;
+      // if storedAlready != -1, then we proceed (this means it's empty and we can skip)
+      if (storedAlready >= 0 && currComm != storedAlready) {
 
           // is_local, direct access local info
           if ((storedAlready >= base) && (storedAlready < bound)) {
@@ -320,8 +321,10 @@ GraphWeight sycl_distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1
                                     std::vector<GraphElem> &clmap, 
 				                            std::vector<GraphWeight> &counter, 
                                     GraphElem &counter_size, const Graph *g, 
-                                    const GraphElem* currComm, 
+                                    const GraphElem* currComm,
+                                    int currCommSize,
                                     const GraphElem* remoteComm,
+                                    int remoteCommSize,
 	                                  const GraphElem vertex, const GraphElem base, const GraphElem bound)
 {
   GraphElem numUniqueClusters = 1L;
@@ -331,28 +334,33 @@ GraphWeight sycl_distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1
     const Edge &edge = g->get_edge(j);
     const GraphElem &tail_ = edge.tail_;
     const GraphWeight &weight = edge.weight_;
-    GraphElem tcomm;
 
     if (tail_ == vertex + base)
       selfLoop += weight;
 
     // is_local, direct access local std::vector<GraphElem>
-    if ((tail_ >= base) && (tail_ < bound))
+    GraphElem tcomm;
+    if ((tail_ >= base) && (tail_ < bound)){
+      assert(0 <= (tail_ - base) && (tail_ - base) < currCommSize);
       tcomm = currComm[tail_ - base];
+    }
     else { // is_remote, lookup map
+      assert(0 <= tail_ && tail_ < remoteCommSize);
       tcomm = remoteComm[tail_];
-
-#ifdef DEBUG_PRINTF  
       assert(tcomm != -1); // -1 means not there in the vector - (remoteComm has been replaced with a vector from a unordered_map)
-#endif
     }
 
-    GraphElem storedAlready = clmap[tcomm];
+    assert (0 <= tcomm && tcomm < clmap.size());
+    const GraphElem storedAlready = clmap[tcomm];
     
-    if (storedAlready != -1)
+    if (storedAlready != -1){
+      assert (0 <= storedAlready && storedAlready < counter.size());
       counter[storedAlready] += weight;
+    }
     else {
+        assert (0 <= tcomm && tcomm < clmap.size());
         clmap[tcomm] = numUniqueClusters;
+        assert (0 <= counter_size && counter_size < counter.size());
         counter[counter_size] = weight;
         counter_size++;
         numUniqueClusters++;
@@ -379,69 +387,65 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
   std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
   std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.begin(), vDegree.end(), vec_gw_allocator);
   // NOTE: `localCinfo` and `localCupdate` both use vectors, so why can't `remoteCinfo` and `remoteCupdate`
-  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
+  std::cout << localCupdate.size() << std::endl;
   std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
+  std::cout << usm_localCupdate.size() << std::endl;
+  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
+
+  // Comm* usm_localCupdate = sycl::malloc_shared<Comm>(localCupdate.size(), q);
+  // for (int i = 0; i < localCupdate.size(); i++){
+  //   usm_localCupdate[i] = localCupdate[i];
+  // }
+  
   // remaining vectors ...
-  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_ge_allocator);
+  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
   std::vector<GraphElem, vec_ge_alloc> usm_remoteComm(remoteComm.begin(), remoteComm.end(), vec_ge_allocator);
   std::vector<Comm, vec_comm_alloc> usm_remoteCinfo(remoteCinfo.begin(), remoteCinfo.end(), vec_comm_allocator);
   std::vector<Comm, vec_comm_alloc> usm_remoteCupdate(remoteCupdate.begin(), remoteCupdate.end(), vec_comm_allocator);
 
-  
   // Access to underlying memory blocks for vectors
-  int _currCommSize = usm_currComm.size();
   auto _currComm = usm_currComm.data();
-  
-  int _targetCommSize = usm_targetComm.size();
   auto _targetComm = usm_targetComm.data();
-
-  int _vDegreeSize = usm_vDegree.size();
   auto _vDegree = usm_vDegree.data();
-
-  int _localCinfoSize = usm_localCinfo.size();
   auto _localCinfo = usm_localCinfo.data();
-
-  int _localCupdateSize = usm_localCupdate.size();
-  auto _localCupdate = usm_localCupdate.data();
-
-  int _clusterWeightSize = usm_clusterWeight.size();
   auto _clusterWeight = usm_clusterWeight.data();
-
-  int _remoteCommSize = usm_remoteComm.size();
   auto _remoteComm = usm_remoteComm.data();
-
-  int _remoteCinfoSize = usm_remoteCinfo.size();
   auto _remoteCinfo = usm_remoteCinfo.data();
-
-  int _remoteCupdateSize = usm_remoteCupdate.size();
   auto _remoteCupdate = usm_remoteCupdate.data();
 
+  // auto _localCupdate = usm_localCupdate;
+  auto _localCupdate = usm_localCupdate.data();
+  int _localCupdateSize = usm_localCupdate.size();
+
+  int _vDegreeSize = usm_vDegree.size();
+  int _clusterWeightSize = usm_clusterWeight.size();
+  int _currCommSize = usm_currComm.size();
+  int _remoteCommSize = usm_remoteComm.size();
+  int _targetCommSize = usm_targetComm.size();
+  int _remoteCupdateSize = usm_remoteCupdate.size();
+  int _localCinfoSize = usm_localCinfo.size();
+  int _remoteCinfoSize = usm_remoteCinfo.size();
   // create private copies (Is it nececssary?)
   const Graph *_dg = &dg;
 
-  // TODO: Port the following thread-public maps
-  // std::unordered_map<GraphElem, GraphElem> remoteComm (x)
-  // std::unordered_map<GraphElem, Comm> remoteCinfo
-  // std::unordered_map<GraphElem, Comm> remoteCupdate
-
-  std::cout << "submitting kernel" << std::endl;
+  std::cout << "submitting kernel: " << me << std::endl;
   MPI_Barrier(MPI_COMM_WORLD);
 
-  // OPTIMIZE MEMORY: We can reduce this from O(V) to a tighter Max(largest_neighborhood)
-  // --> Otherwise, this wastes memory if there are not a lot of edges!
-  int max_neighbors = nv;
-
   q.submit([&](sycl::handler &h){
-    h.parallel_for(nv, [=](sycl::id<1> i){
+   h.parallel_for(nv, [=](sycl::id<1> i){
       GraphElem localTarget = -1;
       GraphElem e0, e1, selfLoop = 0;
+      
+      // OPTIMIZE MEMORY: We can reduce this from O(V) to a tighter Max(largest_neighborhood)
+      // --> Otherwise, this wastes memory if there are not a lot of edges!
+      int max_neighbors = _dg->get_nv();
 
       // NOTE: Do I need to use the usm allocator for thread-private
       std::vector<GraphWeight> counter(max_neighbors, 0.0);
       GraphElem counter_size = 0;
 
       // TODO: Can we make this smaller? i.e. can this vector have a smaller size than (number of global edges?)
-      std::vector<GraphElem> clmap(_dg->get_ne(), -1); 
+      std::vector<GraphElem> clmap(_dg->get_nv(), -1); 
 
       const GraphElem base = _dg->get_base(me), bound = _dg->get_bound(me);
       const GraphElem cc = _currComm[i];
@@ -450,21 +454,15 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
       bool currCommIsLocal = false; 
       bool targetCommIsLocal = false;
 
-      // create atomic references (replaces #omp pragma atomic update)
-      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
-      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_size(_localCupdate[localTarget-base].size);
-      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_degree(_localCupdate[cc-base].degree);
-      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_size(_localCupdate[cc-base].size);
-          
       // Current Community is local
       if (cc >= base && cc < bound) {
-        assert (0 <= (cc-base) && (cc-base) < _localCinfoSize);
+        assert (0 <= (cc - base) && (cc - base) < _localCinfoSize);
         ccDegree=_localCinfo[cc-base].degree;
         ccSize=_localCinfo[cc-base].size;
         currCommIsLocal=true;
       } else {
       // is remote
-        assert (0 <= cc && cc < _remoteCinfoSize);
+        assert (0 <= (cc) && (cc) < _remoteCinfoSize);
         Comm comm = _remoteCinfo[cc];
         ccDegree = comm.degree;
         ccSize = comm.size;
@@ -472,42 +470,45 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
       }
 
       _dg->edge_range(i, e0, e1);
+      
+      assert (0 <= i && i < _vDegreeSize);
 
       if (e0 != e1) {
-        assert (0 <= cc && cc < clmap.size());
+        assert(0 <= cc && cc < clmap.size());
         clmap[cc] = 0;
-        // NOTE: We might be able to use push_back if we use reserve instead??
-        // Otherwise, we'll have to create a length variable
-        // counter.push_back(0.0);
+        // NOTE: We might be able to use push_back if we use reserve instead?? Otherwise, we'll have to create a length variable
         counter_size++;
-        assert (0 <= counter_size && counter_size < max_neighbors);
 
         selfLoop =  sycl_distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
-                                                  _currComm, _remoteComm, i, base, bound);
+                                                  _currComm, _currCommSize, _remoteComm, _remoteCommSize, i, base, bound);
 
         assert (0 <= i && i < _clusterWeightSize);
         _clusterWeight[i] += counter[0];
 
-        assert (0 <= i && i < _vDegreeSize);
         localTarget = sycl_distGetMaxIndex(clmap, counter, selfLoop, _localCinfo, _remoteCinfo, 
                         _vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
-
       }
       else
-        assert (0 <= cc && cc < nv);
         localTarget = cc;
 
+      assert (0 <= localTarget);
+
+      // create atomic references (replaces #omp pragma atomic update)
+      assert( 0 <= (cc - base) && (cc - base) < _localCupdateSize); 	
+      assert( 0 <= (localTarget - base) && (localTarget - base) < _localCupdateSize); 
+      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
+      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_size(_localCupdate[localTarget-base].size);
+      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_degree(_localCupdate[cc-base].degree);
+      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_size(_localCupdate[cc-base].size);
+      
       // is the Target Local?
       if (localTarget >= base && localTarget < bound)
-          targetCommIsLocal = true;
-      
+        targetCommIsLocal = true;
+
       // current and target comm are local - atomic updates to vectors
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
-        assert( base < localTarget < bound);
-        assert( base < cc < bound);
-        assert( cc - base < _localCupdateSize); 	
-        assert( localTarget - base < _localCupdateSize); 	
-
+        assert( base <= localTarget && localTarget < bound);
+        assert( base <= cc && cc < bound);
         localTarget_base_degree += _vDegree[i];
         localTarget_base_size++;
         cc_base_degree -= _vDegree[i];
@@ -516,79 +517,87 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
 
       // current is local, target is not - do atomic on local, accumulate in Maps for remote
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
-            cc_base_degree -= _vDegree[i];
-            cc_base_size--;
-    
-            // search target!
-            Comm target_comm = _remoteCupdate[localTarget];
-            sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
-            sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_size(target_comm.size);
-            
-            target_comm_degree += _vDegree[i];
-            target_comm_size++;
+        cc_base_degree -= _vDegree[i];
+        cc_base_size--;
+
+        // search target!
+        assert(0 <= localTarget && localTarget < _remoteCupdateSize);
+        Comm target_comm = _remoteCupdate[localTarget];
+        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_size(target_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
+        
+        assert (0 <= i && i < _vDegreeSize);
+        target_comm_degree += _vDegree[i];
+        target_comm_size++;
       }
             
       // current is remote, target is local - accumulate for current, atomic on local
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && targetCommIsLocal) {
-            localTarget_base_degree += _vDegree[i];
-            localTarget_base_size++;
-          
-            // search current 
-            Comm current_comm = _remoteCupdate[localTarget];
-            sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
-            sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_size(current_comm.size);
-            
-            current_comm_degree -= _vDegree[i];
-            current_comm_size--;
+        localTarget_base_degree += _vDegree[i];
+        localTarget_base_size++;
+      
+        // search current 
+        assert(0 <= localTarget && localTarget < _remoteCupdateSize);
+        Comm current_comm = _remoteCupdate[localTarget];
+        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
+        
+        assert (0 <= i && i < _vDegreeSize);
+        current_comm_degree -= _vDegree[i];
+        current_comm_size--;
       }
                         
       // current and target are remote - accumulate for both
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
-            // search current 
-            Comm current_comm = _remoteCupdate[localTarget];
-            sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
-            sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_size(current_comm.size);
-            
-            current_comm_degree -= _vDegree[i];
-            current_comm_size--;
-      
-            // search target
-            Comm target_comm = _remoteCupdate[localTarget];
-            sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
-            sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_size(target_comm.size);
-            
-            target_comm_degree += _vDegree[i];
-            target_comm_size++;
+        // search current 
+        assert(0 <= localTarget && localTarget < _remoteCupdateSize);
+        Comm current_comm = _remoteCupdate[localTarget];
+        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
+
+        assert (0 <= i && i < _vDegreeSize);
+        current_comm_degree -= _vDegree[i];
+        current_comm_size--;
+  
+        // search target
+        Comm target_comm = _remoteCupdate[localTarget];
+        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_size(target_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
+        
+        target_comm_degree += _vDegree[i];
+        target_comm_size++;
       }
 
-      #ifdef DEBUG_PRINTF  
-      assert(localTarget != -1);
-      #endif
-
-      assert (i < _targetCommSize);
+      assert(0 <= i && i <= _targetCommSize);
       _targetComm[i] = localTarget;
 
     });
-  }).wait();
+  }).wait(); 
   
   std::cout << "finished executing kernel" << std::endl;
   MPI_Barrier(MPI_COMM_WORLD);
-  // TODO: Copying of data + cleanup!!
-  std::memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
-
-  // for (auto it = targetComm.begin(); it != targetComm.end(); it++){
-  //   assert(*it >= 0);
-  //   assert(*it < dg.get_nv());
-  // }
-
-  std::memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
-  std::memcpy(remoteCupdate.data(), usm_remoteCupdate.data(), usm_remoteCupdate.size() * sizeof(Comm));
-  std::memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
-  std::cout << "finished memory copying!" << std::endl;
+  memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
+  memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
+  memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
+  // sycl::free(usm_localCupdate, q);
+  std::cout << "finished copying memory" << std::endl;
   MPI_Barrier(MPI_COMM_WORLD);
 
-  // BUG: It seems like I have a memory corruption bug here!!
-  // The next function after this one is never executed
+  usm_localCupdate.clear();
+  // usm_localCupdate.~vector();
+
+  usm_currComm.clear();
+  usm_targetComm.clear();
+  usm_vDegree.clear();
+  usm_localCinfo.clear();
+  usm_clusterWeight.clear();
+  usm_remoteComm.clear();
+  usm_remoteCinfo.clear();
+  usm_remoteCupdate.clear();
+
+  // BUG: Double free or corrupt (!prev)
+
+  // This happens on std::vector<Comm, ...> usm_localCupdate
 
 }
 
@@ -933,17 +942,9 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 #endif
 
   
+  GraphElem ne = dg.get_ne();
   remoteComm.clear();
-  // NOTE: the arg `nv` refers to lnv
-  // NOTE: remoteComm uses data stored in rvdata ("receive vertex data"?)
-  // - `rvdata` and `svdata` are used in MPI calls (guessing to swap information)
-  // - Access to `svdata[i]` has been seen to be stored in variables called `vertex`
-  // ==> Therefore, I assume that remoteComm stores vertices
-  // - In the below for loop, the communities can either be remote or local (i.e. tproc == me, or tproc != me)
-  // - Is it possible that a vertex is local but a community is remote?
-  //    - TODO: Answer this question
-
-  remoteComm.resize(dg.get_lnv(), -1); // the size of rvdata should be number of edges. it's possible we have missing comms stored here, so they have default -1
+  remoteComm.resize(dg.get_nv(), -1); // the size of rvdata should be number of edges. it's possible we have missing comms stored here, so they have default -1
 
 
   for (GraphElem i = 0; i < rpos; i++) {
@@ -1666,9 +1667,6 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
   GraphWeight currMod = -1.0;
   int numIters = 0;
   
-  std::cout << "distLouvainMethod start()" << std::endl;
-  MPI_Barrier(MPI_COMM_WORLD);
-
   // Ported to SYCL
   distInitLouvain(dg, pastComm, currComm, vDegree, clusterWeight, localCinfo, 
           localCupdate, constantForSecondTerm, me);
@@ -1685,9 +1683,6 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
   double t0, t1;
   t0 = MPI_Wtime();
 #endif
-
-  std::cout << "exchangeVertexReqs()" << std::endl;
-  MPI_Barrier(MPI_COMM_WORLD);
 
   // setup vertices and communities
 #if defined(USE_MPI_RMA)
@@ -1710,24 +1705,17 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 #endif
  
   // start Louvain iteration
-  std::cout << "Louvain iteration while loop" << std::endl;
-  MPI_Barrier(MPI_COMM_WORLD);
-
   while(true) {
 #ifdef DEBUG_PRINTF  
     const double t2 = MPI_Wtime();
     if (me == 0)
         std::cout << "Starting Louvain iteration: " << numIters << std::endl;
 #endif
-
     numIters++;
 
 #ifdef DEBUG_PRINTF  
     t0 = MPI_Wtime();
 #endif
-
-    std::cout << "fillRemoteCommunities()" << std::endl;
-    MPI_Barrier(MPI_COMM_WORLD);
 
 #if defined(USE_MPI_RMA)
     fillRemoteCommunities(dg, me, nprocs, ssz, rsz, ssizes, 
@@ -1741,7 +1729,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
             remoteCinfo, remoteComm, remoteCupdate);
 #endif
 
-    std::cout << "Executed fillRemoteCommunities(...) " << std::endl;
+    //std::cout "Executed fillRemoteCommunities(...) " << std::endl;
     MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef DEBUG_PRINTF  
@@ -1761,11 +1749,10 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     MPI_Barrier(MPI_COMM_WORLD);
     distCleanCWandCU(nv, clusterWeight, localCupdate);
 
-
     // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
-    // sycl_distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
-    //         localCupdate, remoteComm, remoteCinfo, remoteCupdate,
-    //         constantForSecondTerm, clusterWeight, me);
+    sycl_distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
+                                    localCupdate, remoteComm, remoteCinfo, remoteCupdate,
+                                    constantForSecondTerm, clusterWeight, me);
 
 
     // Ported to SYCL
@@ -1800,6 +1787,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     auto _currComm = usm_currComm.data();
     auto _targetComm = usm_targetComm.data();
 
+    std::cout << "Updating variables for next iteration" << std::endl;
     q.submit([&](sycl::handler &h){
       h.parallel_for(nv, [=](sycl::id<1> i){
         GraphElem tmp = _pastComm[i];
@@ -1809,11 +1797,12 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
       });
     }).wait();
     
+    std::cout << "Copying memory" << std::endl;
     // Update original STL containers
     std::memcpy(pastComm.data(), usm_pastComm.data(), usm_pastComm.size() * sizeof(GraphElem));
     std::memcpy(currComm.data(), usm_currComm.data(), usm_currComm.size() * sizeof(GraphElem));
     std::memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
-
+    std::cout << "Louvain Iteration exit loop" << std::endl;
   } // end of Louvain iteration
 
   std::cout << "Louvain method exit for loop" << std::endl;
