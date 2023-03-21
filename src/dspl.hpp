@@ -276,6 +276,7 @@ GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap,
   GraphElem maxSize = currSize; 
   GraphElem size = 0;
 
+  GraphElem vertexIndex = 0;
   auto iter = clmap.begin();
 #ifdef DEBUG_PRINTF  
   assert(iter != clmap.end());
@@ -283,16 +284,16 @@ GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap,
   do {
       GraphElem storedAlready = *iter;
       // if storedAlready != -1, then we proceed (this means it's empty and we can skip)
-      if (storedAlready >= 0 && currComm != storedAlready) {
+      if (storedAlready >= 0 && currComm != vertexIndex) {
 
           // is_local, direct access local info
-          if ((storedAlready >= base) && (storedAlready < bound)) {
-              ay = localCinfo[storedAlready-base].degree;
-              size = localCinfo[storedAlready - base].size;   
+          if ((vertexIndex >= base) && (vertexIndex < bound)) {
+              ay = localCinfo[vertexIndex-base].degree;
+              size = localCinfo[vertexIndex - base].size;   
           }
           else {
               // is_remote, lookup map
-              Comm remote_comm = remoteCinfo[storedAlready];
+              Comm remote_comm = remoteCinfo[vertexIndex];
               ay = remote_comm.degree;
               size = remote_comm.size; 
           }
@@ -301,14 +302,14 @@ GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap,
 
           curGain = 2.0 * (eiy - eix) - 2.0 * vDegree * (ay - ax) * constant;
 
-          if ((curGain > maxGain) ||
-                  ((curGain == maxGain) && (curGain != 0.0) && (storedAlready < maxIndex))) {
+          if ((curGain > maxGain) || ((curGain == maxGain) && (curGain != 0.0) && (vertexIndex < maxIndex))) {
               maxGain = curGain;
-              maxIndex = storedAlready;
+              maxIndex = vertexIndex;
               maxSize = size;
           }
       }
       iter++;
+      vertexIndex++;
   } while (iter != clmap.end());
 
   if ((maxSize == 1) && (currSize == 1) && (maxIndex > currComm))
@@ -320,7 +321,8 @@ GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap,
 GraphWeight sycl_distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
                                     std::vector<GraphElem> &clmap, 
 				                            std::vector<GraphWeight> &counter, 
-                                    GraphElem &counter_size, const Graph *g, 
+                                    GraphElem &counter_size,
+                                    const Graph *g, 
                                     const GraphElem* currComm,
                                     int currCommSize,
                                     const GraphElem* remoteComm,
@@ -392,11 +394,6 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
   std::cout << usm_localCupdate.size() << std::endl;
   std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
 
-  // Comm* usm_localCupdate = sycl::malloc_shared<Comm>(localCupdate.size(), q);
-  // for (int i = 0; i < localCupdate.size(); i++){
-  //   usm_localCupdate[i] = localCupdate[i];
-  // }
-  
   // remaining vectors ...
   std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
   std::vector<GraphElem, vec_ge_alloc> usm_remoteComm(remoteComm.begin(), remoteComm.end(), vec_ge_allocator);
@@ -431,21 +428,24 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
   std::cout << "submitting kernel: " << me << std::endl;
   MPI_Barrier(MPI_COMM_WORLD);
 
+
   q.submit([&](sycl::handler &h){
+    sycl::stream out(1024, 256, h);
+
    h.parallel_for(nv, [=](sycl::id<1> i){
       GraphElem localTarget = -1;
       GraphElem e0, e1, selfLoop = 0;
       
       // OPTIMIZE MEMORY: We can reduce this from O(V) to a tighter Max(largest_neighborhood)
       // --> Otherwise, this wastes memory if there are not a lot of edges!
-      int max_neighbors = _dg->get_nv();
+      int max_neighbors = nv;
 
       // NOTE: Do I need to use the usm allocator for thread-private
       std::vector<GraphWeight> counter(max_neighbors, 0.0);
       GraphElem counter_size = 0;
 
       // TODO: Can we make this smaller? i.e. can this vector have a smaller size than (number of global edges?)
-      std::vector<GraphElem> clmap(_dg->get_nv(), -1); 
+      std::vector<GraphElem> clmap(nv, -1); 
 
       const GraphElem base = _dg->get_base(me), bound = _dg->get_bound(me);
       const GraphElem cc = _currComm[i];
@@ -479,18 +479,21 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
         // NOTE: We might be able to use push_back if we use reserve instead?? Otherwise, we'll have to create a length variable
         counter_size++;
 
+        // modified counter, counter_size, clmap
         selfLoop =  sycl_distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
                                                   _currComm, _currCommSize, _remoteComm, _remoteCommSize, i, base, bound);
 
         assert (0 <= i && i < _clusterWeightSize);
         _clusterWeight[i] += counter[0];
 
+        // no modifications
         localTarget = sycl_distGetMaxIndex(clmap, counter, selfLoop, _localCinfo, _remoteCinfo, 
                         _vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
       }
       else
         localTarget = cc;
 
+      out << "vertex: " << i << ", target: " << localTarget << ", selfLoop: " << selfLoop << sycl::endl;
       assert (0 <= localTarget);
 
       // create atomic references (replaces #omp pragma atomic update)
@@ -538,7 +541,7 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
       
         // search current 
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
-        Comm current_comm = _remoteCupdate[localTarget];
+        Comm current_comm = _remoteCupdate[cc];
         sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
         sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
         
@@ -551,7 +554,7 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
         // search current 
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
-        Comm current_comm = _remoteCupdate[localTarget];
+        Comm current_comm = _remoteCupdate[cc];
         sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
         sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
 
@@ -568,24 +571,29 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
         target_comm_size++;
       }
 
-      assert(0 <= i && i <= _targetCommSize);
+      assert(0 <= i && i < _targetCommSize);
       _targetComm[i] = localTarget;
 
     });
   }).wait(); 
+
   
   std::cout << "finished executing kernel" << std::endl;
   MPI_Barrier(MPI_COMM_WORLD);
   memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
   memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
   memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
-  // sycl::free(usm_localCupdate, q);
+
   std::cout << "finished copying memory" << std::endl;
+
+
+  std::cout << "localCupdate" << std::endl;
+  
+
+
   MPI_Barrier(MPI_COMM_WORLD);
 
   usm_localCupdate.clear();
-  // usm_localCupdate.~vector();
-
   usm_currComm.clear();
   usm_targetComm.clear();
   usm_vDegree.clear();
