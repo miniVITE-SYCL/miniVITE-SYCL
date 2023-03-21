@@ -389,9 +389,9 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
   std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
   std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.begin(), vDegree.end(), vec_gw_allocator);
   // NOTE: `localCinfo` and `localCupdate` both use vectors, so why can't `remoteCinfo` and `remoteCupdate`
-  std::cout << localCupdate.size() << std::endl;
+  // std::cout << localCupdate.size() << std::endl;
   std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
-  std::cout << usm_localCupdate.size() << std::endl;
+  // std::cout << usm_localCupdate.size() << std::endl;
   std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
 
   // remaining vectors ...
@@ -438,14 +438,15 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
       
       // OPTIMIZE MEMORY: We can reduce this from O(V) to a tighter Max(largest_neighborhood)
       // --> Otherwise, this wastes memory if there are not a lot of edges!
-      int max_neighbors = nv;
+      // NOTE: This doesn't work when using get_lnv() on MPI (segmentation fault!)
+      int max_neighbors = _dg->get_nv();
 
       // NOTE: Do I need to use the usm allocator for thread-private
       std::vector<GraphWeight> counter(max_neighbors, 0.0);
       GraphElem counter_size = 0;
 
       // TODO: Can we make this smaller? i.e. can this vector have a smaller size than (number of global edges?)
-      std::vector<GraphElem> clmap(nv, -1); 
+      std::vector<GraphElem> clmap(max_neighbors, -1); 
 
       const GraphElem base = _dg->get_base(me), bound = _dg->get_bound(me);
       const GraphElem cc = _currComm[i];
@@ -493,7 +494,7 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
       else
         localTarget = cc;
 
-      out << "vertex: " << i << ", target: " << localTarget << ", selfLoop: " << selfLoop << sycl::endl;
+      // out << "vertex: " << i << ", target: " << localTarget << ", selfLoop: " << selfLoop << sycl::endl;
       assert (0 <= localTarget);
 
       // create atomic references (replaces #omp pragma atomic update)
@@ -585,11 +586,6 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
   memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
 
   std::cout << "finished copying memory" << std::endl;
-
-
-  std::cout << "localCupdate" << std::endl;
-  
-
 
   MPI_Barrier(MPI_COMM_WORLD);
 
