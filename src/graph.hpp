@@ -166,6 +166,9 @@ class Graph
 
         int get_owner(const GraphElem vertex) const
         {
+            assert(parts_[0] == 0);
+            assert(vertex >= 0);
+
             const std::vector<GraphElem>::const_iterator iter = 
                 std::upper_bound(parts_.begin(), parts_.end(), vertex);
 
