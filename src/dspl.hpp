@@ -381,8 +381,8 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
                                       std::vector<Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
                                       std::vector<GraphWeight> &clusterWeight, const int me){
 
-  std::cout << "sycl_distExecuteLouvainIteration() method call" << std::endl;
-  MPI_Barrier(MPI_COMM_WORLD);
+  // std::cout << "sycl_distExecuteLouvainIteration() method call" << std::endl;
+  // MPI_Barrier(MPI_COMM_WORLD);
 
   // USM allocation for std::vectors
   std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
@@ -424,9 +424,6 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
   int _remoteCinfoSize = usm_remoteCinfo.size();
   // create private copies (Is it nececssary?)
   const Graph *_dg = &dg;
-
-  std::cout << "submitting kernel: " << me << std::endl;
-  MPI_Barrier(MPI_COMM_WORLD);
 
 
   q.submit([&](sycl::handler &h){
@@ -579,15 +576,14 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
   }).wait(); 
 
   
-  std::cout << "finished executing kernel" << std::endl;
-  MPI_Barrier(MPI_COMM_WORLD);
+  // std::cout << "finished executing kernel" << std::endl;
+  // MPI_Barrier(MPI_COMM_WORLD);
   memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
   memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
   memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
 
-  std::cout << "finished copying memory" << std::endl;
-
-  MPI_Barrier(MPI_COMM_WORLD);
+  // std::cout << "finished copying memory" << std::endl;
+  // MPI_Barrier(MPI_COMM_WORLD);
 
   usm_localCupdate.clear();
   usm_currComm.clear();
@@ -1048,7 +1044,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   rtcsz = *_rtcsz;
   // SYCL Port End
   // std::cout << "End of SYCL Port" << std::endl;
-  MPI_Barrier(MPI_COMM_WORLD);
+  // MPI_Barrier(MPI_COMM_WORLD);
   
 
 #ifdef DEBUG_PRINTF  
@@ -1734,7 +1730,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 #endif
 
     //std::cout "Executed fillRemoteCommunities(...) " << std::endl;
-    MPI_Barrier(MPI_COMM_WORLD);
+    // MPI_Barrier(MPI_COMM_WORLD);
 
 #ifdef DEBUG_PRINTF  
     t1 = MPI_Wtime();
@@ -1749,8 +1745,8 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 #endif
 
     // Ported to SYCL
-    std::cout << "Cleaning CW and CU" << std::endl;
-    MPI_Barrier(MPI_COMM_WORLD);
+    // std::cout << "Cleaning CW and CU" << std::endl;
+    // MPI_Barrier(MPI_COMM_WORLD);
     distCleanCWandCU(nv, clusterWeight, localCupdate);
 
     // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
@@ -1760,18 +1756,16 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
 
 
     // Ported to SYCL
-    std::cout << "distUpdateLocalCinfo" << std::endl;
-    MPI_Barrier(MPI_COMM_WORLD);
+    // std::cout << "distUpdateLocalCinfo" << std::endl;
+    // MPI_Barrier(MPI_COMM_WORLD);
     distUpdateLocalCinfo(localCinfo, localCupdate);
 
-    // communicate remote communities (TODO: Need to port)
-    std::cout << "updateRemoteCommunities" << std::endl;
-    MPI_Barrier(MPI_COMM_WORLD);
+    // std::cout << "updateRemoteCommunities" << std::endl;
+    // MPI_Barrier(MPI_COMM_WORLD);
     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
 
-    // compute modularity (TODO: Need to port)
-    std::cout << "Compute modularity" << std::endl;
-    MPI_Barrier(MPI_COMM_WORLD);
+    // std::cout << "Compute modularity" << std::endl;
+    // MPI_Barrier(MPI_COMM_WORLD);
     currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
 
     // exit criteria
@@ -1783,7 +1777,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
         prevMod = lower;
 
     // Define sycl USM constructs
-    std::cout << "Louvain method iteration cleanup" << std::endl;
+    // std::cout << "Louvain method iteration cleanup" << std::endl;
     std::vector<GraphElem, vec_ge_alloc> usm_pastComm(pastComm.begin(), pastComm.end(), vec_ge_allocator);
     std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
     std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
@@ -1791,7 +1785,7 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
     auto _currComm = usm_currComm.data();
     auto _targetComm = usm_targetComm.data();
 
-    std::cout << "Updating variables for next iteration" << std::endl;
+    // std::cout << "Updating variables for next iteration" << std::endl;
     q.submit([&](sycl::handler &h){
       h.parallel_for(nv, [=](sycl::id<1> i){
         GraphElem tmp = _pastComm[i];
@@ -1801,15 +1795,15 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
       });
     }).wait();
     
-    std::cout << "Copying memory" << std::endl;
+    // std::cout << "Copying memory" << std::endl;
     // Update original STL containers
     std::memcpy(pastComm.data(), usm_pastComm.data(), usm_pastComm.size() * sizeof(GraphElem));
     std::memcpy(currComm.data(), usm_currComm.data(), usm_currComm.size() * sizeof(GraphElem));
     std::memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
-    std::cout << "Louvain Iteration exit loop" << std::endl;
+    // std::cout << "Louvain Iteration exit loop" << std::endl;
   } // end of Louvain iteration
 
-  std::cout << "Louvain method exit for loop" << std::endl;
+  // std::cout << "Louvain method exit for loop" << std::endl;
 
 #if defined(USE_MPI_RMA)
   MPI_Win_unlock_all(commwin);
