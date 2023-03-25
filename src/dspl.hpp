@@ -1474,7 +1474,7 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
         const int me, const int nprocs, MPI_Win &commwin)
 #else
 void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
-        std::vector<GraphElem> &ssizes, std::vector<GraphElem> &rsizes, 
+        std::vector<GraphElem> &ssizes, std::vector<GraphElem, vec_ge_alloc> &rsizes, 
         std::vector<GraphElem> &svdata, std::vector<GraphElem> &rvdata,
         const int me, const int nprocs)
 #endif
@@ -1509,7 +1509,7 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
   ssz = 0, rsz = 0;
 
   int pproc = 0;
-  // TODO FIXME parallelize this loop
+  // TODO FIXME parallelize this loop (original authors)
   for (std::vector<std::unordered_set<GraphElem>>::const_iterator iter = parray.begin(); iter != parray.end(); iter++) {
     ssz += iter->size();
     ssizes[pproc] = iter->size();
@@ -1522,10 +1522,9 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
   GraphElem rsz_r = 0;
   
   // SYCL Port
-  std::vector<GraphElem, vec_ge_alloc> usm_rsizes(rsizes.begin(), rsizes.end(), vec_ge_allocator);
   GraphElem *_rsz_r = sycl::malloc_host<GraphElem>(1, q);
   *_rsz_r = rsz_r;
-  auto _rsizes = usm_rsizes.data();
+  auto _rsizes = rsizes.data();
 
   int local_group_size = 4;
   q.submit([&](sycl::handler &h){
@@ -1598,7 +1597,13 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 #endif
 
   std::swap(svdata, rvdata);
-  std::swap(ssizes, rsizes);
+  
+  // Cannot perform std::swap on vectors with different allocators 
+  // (i.e. C++ default alloc vs USM shared memory allocator)
+  std::vector<GraphElem> temp(ssizes.begin(), ssizes.end());
+  ssizes.assign(rsizes.begin(), rsizes.end());
+  rsizes.assign(temp.begin(), temp.end());
+
   std::swap(ssz, rsz);
 
   // create MPI window for communities
@@ -1618,12 +1623,12 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 
 #if defined(USE_MPI_RMA)
 GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
-        size_t &ssz, size_t &rsz, std::vector<GraphElem> &ssizes, std::vector<GraphElem> &rsizes, 
+        size_t &ssz, size_t &rsz, std::vector<GraphElem> &ssizes, std::vector<GraphElem> &_rsizes, 
         std::vector<GraphElem> &svdata, std::vector<GraphElem> &rvdata, const GraphWeight lower, 
         const GraphWeight thresh, int &iters, MPI_Win &commwin)
 #else
 GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
-        size_t &ssz, size_t &rsz, std::vector<GraphElem> &ssizes, std::vector<GraphElem> &rsizes, 
+        size_t &ssz, size_t &rsz, std::vector<GraphElem> &ssizes, std::vector<GraphElem> &_rsizes, 
         std::vector<GraphElem> &svdata, std::vector<GraphElem> &rvdata, const GraphWeight lower, 
         const GraphWeight thresh, int &iters)
 #endif
@@ -1637,6 +1642,9 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
 
   void *memory_block = sycl::malloc_shared<Graph>(1, q);
   const Graph dg = *new(memory_block) Graph(_dg);
+
+  std::vector<GraphElem, vec_ge_alloc> rsizes(_rsizes.begin(), _rsizes.end(), vec_ge_allocator);
+
   
   const GraphElem nv = dg.get_lnv();
   MPI_Comm gcomm = dg.get_comm();
@@ -1647,9 +1655,41 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
   int numIters = 0;
   
   // Ported to SYCL
-  distInitLouvain(dg, pastComm, currComm, vDegree, clusterWeight, localCinfo, 
-          localCupdate, constantForSecondTerm, me);
+  distInitLouvain(dg, pastComm, currComm, vDegree, clusterWeight, localCinfo, localCupdate, constantForSecondTerm, me);
   targetComm.resize(nv);
+
+
+#ifdef DEBUG_PRINTF  
+  std::cout << "[" << me << "]constantForSecondTerm: " << constantForSecondTerm << std::endl;
+  if (me == 0)
+      std::cout << "Threshold: " << thresh << std::endl;
+#endif
+  const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
+
+#ifdef DEBUG_PRINTF  
+  double t0, t1;
+  t0 = MPI_Wtime();
+#endif
+
+  // setup vertices and communities
+#if defined(USE_MPI_RMA)
+  exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
+          svdata, rvdata, me, nprocs, commwin);
+  
+  // store the remote displacements 
+  std::vector<GraphElem> disp(nprocs);
+  MPI_Exscan(ssizes.data(), (GraphElem*)disp.data(), nprocs, MPI_GRAPH_TYPE, 
+          MPI_SUM, gcomm);
+#else
+  // TODO: Port to SYCL
+  exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
+          svdata, rvdata, me, nprocs);
+#endif
+
+#ifdef DEBUG_PRINTF  
+  t1 = MPI_Wtime();
+  std::cout << "[" << me << "]Initial communication setup time before Louvain iteration (in s): " << (t1 - t0) << std::endl;
+#endif
 
   // we then need to free the allocated block
   // dg->~Graph(); // NOTE: Why doesn't this work?
@@ -1657,37 +1697,6 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
   return 0.05;
 }
 
-// #ifdef DEBUG_PRINTF  
-//   std::cout << "[" << me << "]constantForSecondTerm: " << constantForSecondTerm << std::endl;
-//   if (me == 0)
-//       std::cout << "Threshold: " << thresh << std::endl;
-// #endif
-//   const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
-
-// #ifdef DEBUG_PRINTF  
-//   double t0, t1;
-//   t0 = MPI_Wtime();
-// #endif
-
-//   // setup vertices and communities
-// #if defined(USE_MPI_RMA)
-//   exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
-//           svdata, rvdata, me, nprocs, commwin);
-  
-//   // store the remote displacements 
-//   std::vector<GraphElem> disp(nprocs);
-//   MPI_Exscan(ssizes.data(), (GraphElem*)disp.data(), nprocs, MPI_GRAPH_TYPE, 
-//           MPI_SUM, gcomm);
-// #else
-//   // TODO: Port to SYCL
-//   exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
-//           svdata, rvdata, me, nprocs);
-// #endif
-
-// #ifdef DEBUG_PRINTF  
-//   t1 = MPI_Wtime();
-//   std::cout << "[" << me << "]Initial communication setup time before Louvain iteration (in s): " << (t1 - t0) << std::endl;
-// #endif
  
 //   // start Louvain iteration
 //   while(true) {
