@@ -207,10 +207,10 @@ void distInitComm(std::vector<GraphElem, vec_ge_alloc> &pastComm,
 
 } // distInitComm
 
-void distInitLouvain(const Graph &dg, std::vector<GraphElem> &pastComm, 
-        std::vector<GraphElem> &currComm, std::vector<GraphWeight> &vDegree, 
-        std::vector<GraphWeight> &clusterWeight, std::vector<Comm> &localCinfo, 
-        std::vector<Comm> &localCupdate, GraphWeight &constantForSecondTerm,
+void distInitLouvain(const Graph &dg, std::vector<GraphElem, vec_ge_alloc> &pastComm, 
+        std::vector<GraphElem, vec_ge_alloc> &currComm, std::vector<GraphWeight, vec_gw_alloc> &vDegree, 
+        std::vector<GraphWeight, vec_gw_alloc> &clusterWeight, std::vector<Comm, vec_comm_alloc> &localCinfo, 
+        std::vector<Comm, vec_comm_alloc> &localCupdate, GraphWeight &constantForSecondTerm,
         const int me)
 {
   const GraphElem base = dg.get_base(me);
@@ -224,33 +224,10 @@ void distInitLouvain(const Graph &dg, std::vector<GraphElem> &pastComm,
   localCinfo.resize(nv);
   localCupdate.resize(nv);
 
-  // SYCL Construct and USM handling Start --------
-  // we use the allocated memory in the constructor
-  std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.size(), vec_gw_allocator);
-  std::vector<GraphElem, vec_ge_alloc> usm_pastComm(pastComm.size(), vec_ge_allocator),
-                                       usm_currComm(currComm.size(), vec_ge_allocator);
-  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.size(), vec_comm_allocator);
-  // we create a shadow usm memory graph
-  void *memory_block = sycl::malloc_shared<Graph>(1, q);
-  Graph *usm_g = new(memory_block) Graph(dg);
-  // SYCL Construct and USM handling End --------
-
-  distSumVertexDegree(*usm_g, usm_vDegree, usm_localCinfo, q);
-  constantForSecondTerm = distCalcConstantForSecondTerm(usm_vDegree, gcomm, q);
-  distInitComm(usm_pastComm, usm_currComm, base, q);
+  distSumVertexDegree(dg, vDegree, localCinfo, q);
+  constantForSecondTerm = distCalcConstantForSecondTerm(vDegree, gcomm, q);
+  distInitComm(pastComm, currComm, base, q);
   
-  // SYCL Construct and USM Destruction start ---------
-  // update our original STL containers from our SYCL USM memory
-  std::memcpy(vDegree.data(), usm_vDegree.data(), vDegree.size() * sizeof(GraphWeight));
-  std::memcpy(localCinfo.data(), usm_localCinfo.data(), localCinfo.size() * sizeof(Comm));
-  std::memcpy(currComm.data(), usm_currComm.data(), currComm.size() * sizeof(GraphElem));
-  std::memcpy(pastComm.data(), usm_pastComm.data(), pastComm.size() * sizeof(GraphElem));
-  // We need to call the deconstructor for new placement objects
-  usm_g->~Graph();
-  // we then need to free the allocated block
-  sycl::free(usm_g, q);
-  // SYCL Construct and USM Destruction End ---------
-
 } // distInitLouvain
 
 GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap, 
@@ -373,15 +350,15 @@ GraphWeight sycl_distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1
 } // distBuildLocalMapCounter
 
 
-void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std::vector<GraphElem> &currComm,
-				                              std::vector<GraphElem> &targetComm, const std::vector<GraphWeight> &vDegree,
-                                      std::vector<Comm> &localCinfo, std::vector<Comm> &localCupdate,
-				                              const std::vector<GraphElem> &remoteComm, 
-                                      const std::vector<Comm> &remoteCinfo, 
-                                      std::vector<Comm> &remoteCupdate, const GraphWeight constantForSecondTerm,
-                                      std::vector<GraphWeight> &clusterWeight, const int me){
+void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std::vector<GraphElem, vec_ge_alloc> &currComm,
+				                              std::vector<GraphElem, vec_ge_alloc> &targetComm, const std::vector<GraphWeight, vec_gw_alloc> &vDegree,
+                                      std::vector<Comm, vec_comm_alloc> &localCinfo, std::vector<Comm, vec_comm_alloc> &localCupdate,
+				                              const std::vector<GraphElem, vec_ge_alloc> &remoteComm, 
+                                      const std::vector<Comm, vec_comm_alloc> &remoteCinfo, 
+                                      std::vector<Comm, vec_comm_alloc> &remoteCupdate, const GraphWeight constantForSecondTerm,
+                                      std::vector<GraphWeight, vec_gw_alloc> &clusterWeight, const int me){
 
-  // std::cout << "sycl_distExecuteLouvainIteration() method call" << std::endl;
+  // std::cout << "distExecuteLouvainIteration() method call" << std::endl;
   // MPI_Barrier(MPI_COMM_WORLD);
 
   // USM allocation for std::vectors
@@ -602,8 +579,8 @@ void sycl_distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const
 }
 
 
-GraphWeight distComputeModularity(const Graph &g, std::vector<Comm> &localCinfo,
-			     const std::vector<GraphWeight> &clusterWeight,
+GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_alloc> &localCinfo,
+			     const std::vector<GraphWeight, vec_gw_alloc> &clusterWeight,
 			     const GraphWeight constantForSecondTerm,
 			     const int me)
 {
@@ -705,7 +682,7 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm> &localCinfo,
   return currMod;
 } // distComputeModularity
 
-void distUpdateLocalCinfo(std::vector<Comm> &localCinfo, const std::vector<Comm> &localCupdate)
+void distUpdateLocalCinfo(std::vector<Comm, vec_comm_alloc> &localCinfo, const std::vector<Comm, vec_comm_alloc> &localCupdate)
 {
   size_t csz = localCinfo.size();
 
@@ -726,7 +703,7 @@ void distUpdateLocalCinfo(std::vector<Comm> &localCinfo, const std::vector<Comm>
   // localCupdate is not updated -- check const above
 }
 
-void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight> &clusterWeight, std::vector<Comm> &localCupdate)
+void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight, vec_gw_alloc> &clusterWeight, std::vector<Comm, vec_comm_alloc> &localCupdate)
 {
   // We provide local SYCL USM constructs
   std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
@@ -755,16 +732,16 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
         const size_t &ssz, const size_t &rsz, const std::vector<GraphElem> &ssizes, 
         const std::vector<GraphElem> &rsizes, const std::vector<GraphElem> &svdata, 
         const std::vector<GraphElem> &rvdata, const std::vector<GraphElem> &currComm, 
-        const std::vector<Comm> &localCinfo, std::vector<Comm> &remoteCinfo, 
-        std::vector<GraphElem> &remoteComm, std::vector<Comm> &remoteCupdate, 
+        const std::vector<Comm, vec_comm_alloc> &localCinfo, std::vector<Comm, vec_comm_alloc> &remoteCinfo, 
+        std::vector<GraphElem> &remoteComm, std::vector<Comm, vec_comm_alloc> &remoteCupdate, 
         const MPI_Win &commwin, const std::vector<GraphElem> &disp)
 #else
 void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
         const size_t &ssz, const size_t &rsz, const std::vector<GraphElem> &ssizes, 
         const std::vector<GraphElem> &rsizes, const std::vector<GraphElem> &svdata, 
         const std::vector<GraphElem> &rvdata, const std::vector<GraphElem> &currComm, 
-        const std::vector<Comm> &localCinfo, std::vector<Comm> &remoteCinfo, 
-        std::vector<GraphElem> &remoteComm, std::vector<Comm> &remoteCupdate)
+        const std::vector<Comm, vec_comm_alloc> &localCinfo, std::vector<Comm, vec_comm_alloc> &remoteCinfo, 
+        std::vector<GraphElem> &remoteComm, std::vector<Comm, vec_comm_alloc> &remoteCupdate)
 #endif
 {
 #if defined(USE_MPI_RMA)
@@ -1311,8 +1288,8 @@ void destroyCommunityMPIType()
   MPI_Type_free(&commType);
 } // destroyCommunityMPIType
 
-void updateRemoteCommunities(const Graph &dg, std::vector<Comm> &localCinfo,
-			     const std::vector<Comm> &remoteCupdate,
+void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> &localCinfo,
+			     const std::vector<Comm, vec_comm_alloc> &remoteCupdate,
 			     const int me, const int nprocs)
 {
   const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
@@ -1645,19 +1622,21 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
         std::vector<GraphElem> &svdata, std::vector<GraphElem> &rvdata, const GraphWeight lower, 
         const GraphWeight thresh, int &iters, MPI_Win &commwin)
 #else
-GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
+GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
         size_t &ssz, size_t &rsz, std::vector<GraphElem> &ssizes, std::vector<GraphElem> &rsizes, 
         std::vector<GraphElem> &svdata, std::vector<GraphElem> &rvdata, const GraphWeight lower, 
         const GraphWeight thresh, int &iters)
 #endif
 {
-  std::vector<GraphElem> pastComm, currComm, targetComm;
-  std::vector<GraphWeight> vDegree;
-  std::vector<GraphWeight> clusterWeight;
-  std::vector<Comm> localCinfo, localCupdate;
- 
-  std::vector<GraphElem> remoteComm;
-  std::vector<Comm> remoteCinfo, remoteCupdate;
+  std::vector<GraphWeight, vec_gw_alloc> vDegree(vec_gw_allocator);
+  std::vector<GraphElem, vec_ge_alloc> pastComm(vec_ge_allocator), currComm(vec_ge_allocator), targetComm(vec_ge_allocator);
+  std::vector<Comm, vec_comm_alloc> localCinfo(vec_comm_allocator), localCupdate(vec_comm_allocator);
+  std::vector<GraphWeight, vec_gw_alloc> clusterWeight(vec_gw_allocator);
+  std::vector<GraphElem, vec_ge_alloc> remoteComm(vec_ge_allocator);
+  std::vector<Comm, vec_comm_alloc> remoteCinfo(vec_comm_allocator), remoteCupdate(vec_comm_allocator);
+
+  void *memory_block = sycl::malloc_shared<Graph>(1, q);
+  const Graph dg = *new(memory_block) Graph(_dg);
   
   const GraphElem nv = dg.get_lnv();
   MPI_Comm gcomm = dg.get_comm();
@@ -1672,157 +1651,163 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
           localCupdate, constantForSecondTerm, me);
   targetComm.resize(nv);
 
-#ifdef DEBUG_PRINTF  
-  std::cout << "[" << me << "]constantForSecondTerm: " << constantForSecondTerm << std::endl;
-  if (me == 0)
-      std::cout << "Threshold: " << thresh << std::endl;
-#endif
-  const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
+  // we then need to free the allocated block
+  // dg->~Graph(); // NOTE: Why doesn't this work?
+  sycl::free(memory_block, q);
+  return 0.05;
+}
 
-#ifdef DEBUG_PRINTF  
-  double t0, t1;
-  t0 = MPI_Wtime();
-#endif
+// #ifdef DEBUG_PRINTF  
+//   std::cout << "[" << me << "]constantForSecondTerm: " << constantForSecondTerm << std::endl;
+//   if (me == 0)
+//       std::cout << "Threshold: " << thresh << std::endl;
+// #endif
+//   const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
 
-  // setup vertices and communities
-#if defined(USE_MPI_RMA)
-  exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
-          svdata, rvdata, me, nprocs, commwin);
+// #ifdef DEBUG_PRINTF  
+//   double t0, t1;
+//   t0 = MPI_Wtime();
+// #endif
+
+//   // setup vertices and communities
+// #if defined(USE_MPI_RMA)
+//   exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
+//           svdata, rvdata, me, nprocs, commwin);
   
-  // store the remote displacements 
-  std::vector<GraphElem> disp(nprocs);
-  MPI_Exscan(ssizes.data(), (GraphElem*)disp.data(), nprocs, MPI_GRAPH_TYPE, 
-          MPI_SUM, gcomm);
-#else
-  // TODO: Port to SYCL
-  exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
-          svdata, rvdata, me, nprocs);
-#endif
+//   // store the remote displacements 
+//   std::vector<GraphElem> disp(nprocs);
+//   MPI_Exscan(ssizes.data(), (GraphElem*)disp.data(), nprocs, MPI_GRAPH_TYPE, 
+//           MPI_SUM, gcomm);
+// #else
+//   // TODO: Port to SYCL
+//   exchangeVertexReqs(dg, ssz, rsz, ssizes, rsizes, 
+//           svdata, rvdata, me, nprocs);
+// #endif
 
-#ifdef DEBUG_PRINTF  
-  t1 = MPI_Wtime();
-  std::cout << "[" << me << "]Initial communication setup time before Louvain iteration (in s): " << (t1 - t0) << std::endl;
-#endif
+// #ifdef DEBUG_PRINTF  
+//   t1 = MPI_Wtime();
+//   std::cout << "[" << me << "]Initial communication setup time before Louvain iteration (in s): " << (t1 - t0) << std::endl;
+// #endif
  
-  // start Louvain iteration
-  while(true) {
-#ifdef DEBUG_PRINTF  
-    const double t2 = MPI_Wtime();
-    if (me == 0)
-        std::cout << "Starting Louvain iteration: " << numIters << std::endl;
-#endif
-    numIters++;
+//   // start Louvain iteration
+//   while(true) {
+// #ifdef DEBUG_PRINTF  
+//     const double t2 = MPI_Wtime();
+//     if (me == 0)
+//         std::cout << "Starting Louvain iteration: " << numIters << std::endl;
+// #endif
+//     numIters++;
 
-#ifdef DEBUG_PRINTF  
-    t0 = MPI_Wtime();
-#endif
+// #ifdef DEBUG_PRINTF  
+//     t0 = MPI_Wtime();
+// #endif
 
-#if defined(USE_MPI_RMA)
-    fillRemoteCommunities(dg, me, nprocs, ssz, rsz, ssizes, 
-            rsizes, svdata, rvdata, currComm, localCinfo, 
-            remoteCinfo, remoteComm, remoteCupdate, 
-            commwin, disp);
-#else
-    // TODO: Port to SYCL
-    fillRemoteCommunities(dg, me, nprocs, ssz, rsz, ssizes, 
-            rsizes, svdata, rvdata, currComm, localCinfo, 
-            remoteCinfo, remoteComm, remoteCupdate);
-#endif
+// #if defined(USE_MPI_RMA)
+//     fillRemoteCommunities(dg, me, nprocs, ssz, rsz, ssizes, 
+//             rsizes, svdata, rvdata, currComm, localCinfo, 
+//             remoteCinfo, remoteComm, remoteCupdate, 
+//             commwin, disp);
+// #else
+//     // TODO: Port to SYCL
+//     fillRemoteCommunities(dg, me, nprocs, ssz, rsz, ssizes, 
+//             rsizes, svdata, rvdata, currComm, localCinfo, 
+//             remoteCinfo, remoteComm, remoteCupdate);
+// #endif
 
-    //std::cout "Executed fillRemoteCommunities(...) " << std::endl;
-    // MPI_Barrier(MPI_COMM_WORLD);
+//     //std::cout "Executed fillRemoteCommunities(...) " << std::endl;
+//     // MPI_Barrier(MPI_COMM_WORLD);
 
-#ifdef DEBUG_PRINTF  
-    t1 = MPI_Wtime();
-    std::cout << "[" << me << "]Remote community map size: " << remoteComm.size() << std::endl;
-    assert (false) // NOTE: remoteComm.size() is no longer the community map size! This is because instead of a map with elements, it is a sparse array!
-    // TODO: In order to caluclate the remote community size, please iterate over the list, and count the number of non-negative values
-    std::cout << "[" << me << "]Iteration communication time: " << (t1 - t0) << std::endl;
-#endif
+// #ifdef DEBUG_PRINTF  
+//     t1 = MPI_Wtime();
+//     std::cout << "[" << me << "]Remote community map size: " << remoteComm.size() << std::endl;
+//     assert (false) // NOTE: remoteComm.size() is no longer the community map size! This is because instead of a map with elements, it is a sparse array!
+//     // TODO: In order to caluclate the remote community size, please iterate over the list, and count the number of non-negative values
+//     std::cout << "[" << me << "]Iteration communication time: " << (t1 - t0) << std::endl;
+// #endif
 
-#ifdef DEBUG_PRINTF  
-    t0 = MPI_Wtime();
-#endif
+// #ifdef DEBUG_PRINTF  
+//     t0 = MPI_Wtime();
+// #endif
 
-    // Ported to SYCL
-    // std::cout << "Cleaning CW and CU" << std::endl;
-    // MPI_Barrier(MPI_COMM_WORLD);
-    distCleanCWandCU(nv, clusterWeight, localCupdate);
+//     // Ported to SYCL
+//     // std::cout << "Cleaning CW and CU" << std::endl;
+//     // MPI_Barrier(MPI_COMM_WORLD);
+//     distCleanCWandCU(nv, clusterWeight, localCupdate);
 
-    // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
-    sycl_distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
-                                    localCupdate, remoteComm, remoteCinfo, remoteCupdate,
-                                    constantForSecondTerm, clusterWeight, me);
+//     // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
+//     distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
+//                                     localCupdate, remoteComm, remoteCinfo, remoteCupdate,
+//                                     constantForSecondTerm, clusterWeight, me);
 
 
-    // Ported to SYCL
-    // std::cout << "distUpdateLocalCinfo" << std::endl;
-    // MPI_Barrier(MPI_COMM_WORLD);
-    distUpdateLocalCinfo(localCinfo, localCupdate);
+//     // Ported to SYCL
+//     // std::cout << "distUpdateLocalCinfo" << std::endl;
+//     // MPI_Barrier(MPI_COMM_WORLD);
+//     distUpdateLocalCinfo(localCinfo, localCupdate);
 
-    // std::cout << "updateRemoteCommunities" << std::endl;
-    // MPI_Barrier(MPI_COMM_WORLD);
-    updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
+//     // std::cout << "updateRemoteCommunities" << std::endl;
+//     // MPI_Barrier(MPI_COMM_WORLD);
+//     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
 
-    // std::cout << "Compute modularity" << std::endl;
-    // MPI_Barrier(MPI_COMM_WORLD);
-    currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
+//     // std::cout << "Compute modularity" << std::endl;
+//     // MPI_Barrier(MPI_COMM_WORLD);
+//     currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
 
-    // exit criteria
-    if (currMod - prevMod < thresh)
-        break;
+//     // exit criteria
+//     if (currMod - prevMod < thresh)
+//         break;
 
-    prevMod = currMod;
-    if (prevMod < lower)
-        prevMod = lower;
+//     prevMod = currMod;
+//     if (prevMod < lower)
+//         prevMod = lower;
 
-    // Define sycl USM constructs
-    // std::cout << "Louvain method iteration cleanup" << std::endl;
-    std::vector<GraphElem, vec_ge_alloc> usm_pastComm(pastComm.begin(), pastComm.end(), vec_ge_allocator);
-    std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
-    std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
-    auto _pastComm = usm_pastComm.data();
-    auto _currComm = usm_currComm.data();
-    auto _targetComm = usm_targetComm.data();
+//     // Define sycl USM constructs
+//     // std::cout << "Louvain method iteration cleanup" << std::endl;
+//     std::vector<GraphElem, vec_ge_alloc> usm_pastComm(pastComm.begin(), pastComm.end(), vec_ge_allocator);
+//     std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
+//     std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
+//     auto _pastComm = usm_pastComm.data();
+//     auto _currComm = usm_currComm.data();
+//     auto _targetComm = usm_targetComm.data();
 
-    // std::cout << "Updating variables for next iteration" << std::endl;
-    q.submit([&](sycl::handler &h){
-      h.parallel_for(nv, [=](sycl::id<1> i){
-        GraphElem tmp = _pastComm[i];
-        _pastComm[i] = _currComm[i];
-        _currComm[i] = _targetComm[i];
-        _targetComm[i] = tmp;
-      });
-    }).wait();
+//     // std::cout << "Updating variables for next iteration" << std::endl;
+//     q.submit([&](sycl::handler &h){
+//       h.parallel_for(nv, [=](sycl::id<1> i){
+//         GraphElem tmp = _pastComm[i];
+//         _pastComm[i] = _currComm[i];
+//         _currComm[i] = _targetComm[i];
+//         _targetComm[i] = tmp;
+//       });
+//     }).wait();
     
-    // std::cout << "Copying memory" << std::endl;
-    // Update original STL containers
-    std::memcpy(pastComm.data(), usm_pastComm.data(), usm_pastComm.size() * sizeof(GraphElem));
-    std::memcpy(currComm.data(), usm_currComm.data(), usm_currComm.size() * sizeof(GraphElem));
-    std::memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
-    // std::cout << "Louvain Iteration exit loop" << std::endl;
-  } // end of Louvain iteration
+//     // std::cout << "Copying memory" << std::endl;
+//     // Update original STL containers
+//     std::memcpy(pastComm.data(), usm_pastComm.data(), usm_pastComm.size() * sizeof(GraphElem));
+//     std::memcpy(currComm.data(), usm_currComm.data(), usm_currComm.size() * sizeof(GraphElem));
+//     std::memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
+//     // std::cout << "Louvain Iteration exit loop" << std::endl;
+//   } // end of Louvain iteration
 
-  // std::cout << "Louvain method exit for loop" << std::endl;
+//   // std::cout << "Louvain method exit for loop" << std::endl;
 
-#if defined(USE_MPI_RMA)
-  MPI_Win_unlock_all(commwin);
-  MPI_Win_free(&commwin);
-#endif  
+// #if defined(USE_MPI_RMA)
+//   MPI_Win_unlock_all(commwin);
+//   MPI_Win_free(&commwin);
+// #endif  
 
-  iters = numIters;
+//   iters = numIters;
 
-  vDegree.clear();
-  pastComm.clear();
-  currComm.clear();
-  targetComm.clear();
-  clusterWeight.clear();
-  localCinfo.clear();
-  localCupdate.clear();
+//   vDegree.clear();
+//   pastComm.clear();
+//   currComm.clear();
+//   targetComm.clear();
+//   clusterWeight.clear();
+//   localCinfo.clear();
+//   localCupdate.clear();
   
-  return prevMod;
-  //std::cout "Louvain method exit function" << std::endl;
+//   return prevMod;
+//   //std::cout "Louvain method exit function" << std::endl;
 
-} // distLouvainMethod plain
+// } // distLouvainMethod plain
 
 #endif // __DSPL
