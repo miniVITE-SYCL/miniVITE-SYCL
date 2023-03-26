@@ -550,11 +550,8 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   assert((clusterWeight.size() == nv));
 #endif
 
-  // auto _accumulator = sycl::malloc_host<GraphWeight>(2, q);
-  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
-  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
-  auto _localCinfo = usm_localCinfo.data();
-  auto _clusterWeight = usm_clusterWeight.data();
+  auto _localCinfo = localCinfo.data();
+  auto _clusterWeight = clusterWeight.data();
 
   GraphWeight *_le_xx = sycl::malloc_host<GraphWeight>(1, q);
   GraphWeight *_la2_x = sycl::malloc_host<GraphWeight>(1, q);
@@ -563,49 +560,47 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
 
   // NOTE: The order of the arguments matters for the parallel_for lambda
   // This order corresponds to the order of the reductions
-
   int local_group_size = 4;
-  q.submit([&](sycl::handler &h){
-    h.parallel_for(
-      sycl::nd_range<1>{nv, local_group_size},
-      sycl::reduction(_le_xx, std::plus<>()),
-      [=](sycl::nd_item<1> it, auto &_le_xx){
-        int i = it.get_global_id(0);
-        _le_xx += _clusterWeight[i];
-    });
-  });
 
-  q.submit([&](sycl::handler &h){
-    h.parallel_for(
-      sycl::nd_range<1>{nv, local_group_size},
-      sycl::reduction(_la2_x, std::plus<>()),
-      [=](sycl::nd_item<1> it, auto &_la2_x){
-        int i = it.get_global_id(0);
-        _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
-    });
-  });
+  // q.submit([&](sycl::handler &h){
+  //   h.parallel_for(
+  //     sycl::nd_range<1>{nv, local_group_size},
+  //     sycl::reduction(_le_xx, std::plus<>()),
+  //     [=](sycl::nd_item<1> it, auto &_le_xx){
+  //       int i = it.get_global_id(0);
+  //       _le_xx += _clusterWeight[i];
+  //   });
+  // });
 
-  q.wait();
+  // q.submit([&](sycl::handler &h){
+  //   h.parallel_for(
+  //     sycl::nd_range<1>{nv, local_group_size},
+  //     sycl::reduction(_la2_x, std::plus<>()),
+  //     [=](sycl::nd_item<1> it, auto &_la2_x){
+  //       int i = it.get_global_id(0);
+  //       _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
+  //   });
+  // });
 
-  // BUG: The double reduction below doesn't work for some reason?
+  // q.wait();
+
+  // POTENTIAL BUG: The double reduction below doesn't work for some reason, in previous commits?
   // Reproduce issue -> mpirun -n 4 ./miniVITE-SYCL -n 100
   // This doesn't manifest with MPI np=1, or another value (I think)
   // This issues doesn't manifest when local_group_size=1 (only value tested)
   // ==> It's possible that the issue still exists in the above fix attempt, but doesn't manifest in that specific program scenario
 
-  // q.submit([&](sycl::handler &h){
-  //   h.parallel_for(sycl::nd_range<1>{nv, local_group_size},
-  //                  sycl::reduction(_le_xx, std::plus<>()),
-  //                  sycl::reduction(_la2_x, std::plus<>()),
-  //                  [=](sycl::nd_item<1> it, auto &_le_xx, auto &_la2_x){
-  //                     int i = it.get_global_id(0);
-  //                     _le_xx += _clusterWeight[i];
-  //                     // BUG: localCinfo is of type Comm, why are we casting to GraphWeight? Is this the correct thing
-  //                     _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
-  //                  });
-  // }).wait();
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(sycl::nd_range<1>{nv, local_group_size},
+                   sycl::reduction(_le_xx, std::plus<>()),
+                   sycl::reduction(_la2_x, std::plus<>()),
+                   [=](sycl::nd_item<1> it, auto &_le_xx, auto &_la2_x){
+                      int i = it.get_global_id(0);
+                      _le_xx += _clusterWeight[i];
+                      _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
+    });
+  }).wait();
 
-  q.wait();
 
   le_xx = *_le_xx;
   la2_x = *_la2_x;
@@ -1648,16 +1643,17 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
                                     localCupdate, remoteComm, remoteCinfo, remoteCupdate,
                                     constantForSecondTerm, clusterWeight, me);
 
-
     // Ported to SYCL
     distUpdateLocalCinfo(localCinfo, localCupdate);
 
     // Ported to SYCL
     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
+    
+    // Ported to SYCL
+    currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
     break;
   }
 
-//     currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
 
 //     // exit criteria
 //     if (currMod - prevMod < thresh)
