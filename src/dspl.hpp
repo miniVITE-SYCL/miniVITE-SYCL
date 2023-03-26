@@ -287,6 +287,7 @@ GraphElem distGetMaxIndex(const std::vector<GraphElem> &clmap,
   return maxIndex;
 } // distGetMaxIndex
 
+#ifdef DEBUG_PRINTF
 GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
                                     std::vector<GraphElem> &clmap, 
 				                            std::vector<GraphWeight> &counter, 
@@ -297,6 +298,16 @@ GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1,
                                     const GraphElem* remoteComm,
                                     int remoteCommSize,
 	                                  const GraphElem vertex, const GraphElem base, const GraphElem bound)
+#else
+GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
+                                    std::vector<GraphElem> &clmap, 
+				                            std::vector<GraphWeight> &counter, 
+                                    GraphElem &counter_size,
+                                    const Graph *g, 
+                                    const GraphElem* currComm,
+                                    const GraphElem* remoteComm,
+	                                  const GraphElem vertex, const GraphElem base, const GraphElem bound)
+#endif
 {
   GraphElem numUniqueClusters = 1L;
   GraphWeight selfLoop = 0;
@@ -312,26 +323,38 @@ GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1,
     // is_local, direct access local std::vector<GraphElem>
     GraphElem tcomm;
     if ((tail_ >= base) && (tail_ < bound)){
+#ifdef DEBUG_PRINTF
       assert(0 <= (tail_ - base) && (tail_ - base) < currCommSize);
+#endif
       tcomm = currComm[tail_ - base];
     }
     else { // is_remote, lookup map
+#ifdef DEBUG_PRINTF
       assert(0 <= tail_ && tail_ < remoteCommSize);
+#endif
       tcomm = remoteComm[tail_];
+#ifdef DEBUG_PRINTF
       assert(tcomm != -1); // -1 means not there in the vector - (remoteComm has been replaced with a vector from a unordered_map)
+#endif
     }
 
+#ifdef DEBUG_PRINTF
     assert (0 <= tcomm && tcomm < clmap.size());
+#endif
     const GraphElem storedAlready = clmap[tcomm];
     
     if (storedAlready != -1){
+#ifdef DEBUG_PRINTF
       assert (0 <= storedAlready && storedAlready < counter.size());
+#endif
       counter[storedAlready] += weight;
     }
     else {
+#ifdef DEBUG_PRINTF
         assert (0 <= tcomm && tcomm < clmap.size());
-        clmap[tcomm] = numUniqueClusters;
         assert (0 <= counter_size && counter_size < counter.size());
+#endif
+        clmap[tcomm] = numUniqueClusters;
         counter[counter_size] = weight;
         counter_size++;
         numUniqueClusters++;
@@ -362,6 +385,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
   auto _remoteCupdate = remoteCupdate.data();
   auto _localCupdate = localCupdate.data();
 
+#ifdef DEBUG_PRINTF
   int _localCupdateSize = localCupdate.size();
   int _vDegreeSize = vDegree.size();
   int _clusterWeightSize = clusterWeight.size();
@@ -371,26 +395,20 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
   int _remoteCupdateSize = remoteCupdate.size();
   int _localCinfoSize = localCinfo.size();
   int _remoteCinfoSize = remoteCinfo.size();
+#endif
 
   const Graph *_dg = &dg;
 
   q.submit([&](sycl::handler &h){
-    sycl::stream out(1024, 256, h);
-
    h.parallel_for(nv, [=](sycl::id<1> i){
       GraphElem localTarget = -1;
       GraphElem e0, e1, selfLoop = 0;
       
-      // OPTIMIZE MEMORY: We can reduce this from O(V) to a tighter Max(largest_neighborhood)
-      // --> Otherwise, this wastes memory if there are not a lot of edges!
-      // NOTE: This doesn't work when using get_lnv() on MPI (segmentation fault!)
       int max_neighbors = _dg->get_nv();
 
-      // NOTE: Do I need to use the usm allocator for thread-private
       std::vector<GraphWeight> counter(max_neighbors, 0.0);
       GraphElem counter_size = 0;
 
-      // TODO: Can we make this smaller? i.e. can this vector have a smaller size than (number of global edges?)
       std::vector<GraphElem> clmap(max_neighbors, -1); 
 
       const GraphElem base = _dg->get_base(me), bound = _dg->get_bound(me);
@@ -402,13 +420,17 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // Current Community is local
       if (cc >= base && cc < bound) {
+#ifdef DEBUG_PRINTF
         assert (0 <= (cc - base) && (cc - base) < _localCinfoSize);
+#endif
         ccDegree=_localCinfo[cc-base].degree;
         ccSize=_localCinfo[cc-base].size;
         currCommIsLocal=true;
       } else {
-      // is remote
+        // is remote
+#ifdef DEBUG_PRINTF
         assert (0 <= (cc) && (cc) < _remoteCinfoSize);
+#endif
         Comm comm = _remoteCinfo[cc];
         ccDegree = comm.degree;
         ccSize = comm.size;
@@ -416,20 +438,28 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
       }
 
       _dg->edge_range(i, e0, e1);
-      
+
+#ifdef DEBUG_PRINTF
       assert (0 <= i && i < _vDegreeSize);
+#endif
 
       if (e0 != e1) {
+#ifdef DEBUG_PRINTF
         assert(0 <= cc && cc < clmap.size());
+        assert(0 <= i && i < _clusterWeightSize);
+#endif
         clmap[cc] = 0;
-        // NOTE: We might be able to use push_back if we use reserve instead?? Otherwise, we'll have to create a length variable
         counter_size++;
 
         // modified counter, counter_size, clmap
-        selfLoop =  distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
+#ifdef DEBUG_PRINTF
+        selfLoop = distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
                                                   _currComm, _currCommSize, _remoteComm, _remoteCommSize, i, base, bound);
+#else 
+        selfLoop = distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
+                                                  _currComm, _remoteComm, i, base, bound);
+#endif
 
-        assert (0 <= i && i < _clusterWeightSize);
         _clusterWeight[i] += counter[0];
 
         // no modifications
@@ -439,10 +469,11 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
       else
         localTarget = cc;
 
-
-      assert (0 <= localTarget);
-      assert( 0 <= (cc - base) && (cc - base) < _localCupdateSize); 	
-      assert( 0 <= (localTarget - base) && (localTarget - base) < _localCupdateSize); 
+#ifdef DEBUG_PRINTF
+      assert(0 <= localTarget);
+      assert(0 <= (cc - base) && (cc - base) < _localCupdateSize); 	
+      assert(0 <= (localTarget - base) && (localTarget - base) < _localCupdateSize); 
+#endif
 
       // create atomic references (replaces #omp pragma atomic update)
       sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
@@ -456,8 +487,10 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // current and target comm are local - atomic updates to vectors
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
-        assert( base <= localTarget && localTarget < bound);
-        assert( base <= cc && cc < bound);
+#ifdef DEBUG_PRINTF
+        assert(base <= localTarget && localTarget < bound);
+        assert(base <= cc && cc < bound);
+#endif
         localTarget_base_degree += _vDegree[i];
         localTarget_base_size++;
         cc_base_degree -= _vDegree[i];
@@ -466,45 +499,51 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // current is local, target is not - do atomic on local, accumulate in Maps for remote
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
+#ifdef DEBUG_PRINTF
+        assert(0 <= localTarget && localTarget < _remoteCupdateSize);
+        assert(0 <= i && i < _vDegreeSize);
+#endif
         cc_base_degree -= _vDegree[i];
         cc_base_size--;
 
         // search target!
-        assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         Comm target_comm = _remoteCupdate[localTarget];
         sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_size(target_comm.size);
         sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
         
-        assert (0 <= i && i < _vDegreeSize);
         target_comm_degree += _vDegree[i];
         target_comm_size++;
       }
             
       // current is remote, target is local - accumulate for current, atomic on local
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && targetCommIsLocal) {
+#ifdef DEBUG_PRINTF
+        assert(0 <= localTarget && localTarget < _remoteCupdateSize);
+        assert(0 <= i && i < _vDegreeSize);
+#endif
         localTarget_base_degree += _vDegree[i];
         localTarget_base_size++;
       
         // search current 
-        assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         Comm current_comm = _remoteCupdate[cc];
         sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
         sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
         
-        assert (0 <= i && i < _vDegreeSize);
         current_comm_degree -= _vDegree[i];
         current_comm_size--;
       }
                         
       // current and target are remote - accumulate for both
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
-        // search current 
+#ifdef DEBUG_PRINTF
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
+        assert(0 <= i && i < _vDegreeSize);
+#endif
+        // search current 
         Comm current_comm = _remoteCupdate[cc];
         sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
         sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
 
-        assert (0 <= i && i < _vDegreeSize);
         current_comm_degree -= _vDegree[i];
         current_comm_size--;
   
@@ -517,7 +556,9 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         target_comm_size++;
       }
 
+#ifdef DEBUG_PRINTF
       assert(0 <= i && i < _targetCommSize);
+#endif
       _targetComm[i] = localTarget;
 
     });
@@ -620,7 +661,7 @@ void distUpdateLocalCinfo(std::vector<Comm, vec_comm_alloc> &localCinfo, const s
 
 void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight, vec_gw_alloc> &clusterWeight, std::vector<Comm, vec_comm_alloc> &localCupdate)
 {
-  // we create pointers to underlying data
+
   auto _clusterWeight = clusterWeight.data();
   auto _localCupdate = localCupdate.data();
 
@@ -869,7 +910,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   GraphElem stcsz = 0, rtcsz = 0;
   int local_group_size = 4;
 
-  // Porting to SYCL
+  // Ported to SYCL
   GraphElem *_stcsz = sycl::malloc_host<GraphElem>(1, q);
   *_stcsz = stcsz;
 
@@ -882,7 +923,6 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
       sycl::reduction(_stcsz, std::plus<>()),
       [=](sycl::nd_item<1> it, auto &_stcsz){
       int i = it.get_global_id(0);
-      // BUG: Segmentation fault here!
       _scsizes[i] = _rcinfo[i].size();
       _stcsz += _scsizes[i];
     });
@@ -1129,9 +1169,6 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 
   remoteCinfo.clear();
   remoteCupdate.clear();
-  // TODO: Resize these appropriately - What is it storing as the key here?
-  // How should I define non-existent / "null" elements ? For GraphElem containers, it was -1. Here maybe comm.size (GraphElem) == -1?
-  // NOTE: I believe it should be number of vertices - i.e. the largest number of comms is when num_vertices = num_communities
   remoteCinfo.resize(dg.get_nv(), Comm(-1, 0.0));
   remoteCupdate.resize(dg.get_nv(), Comm(-1, 0.0));
 

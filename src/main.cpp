@@ -77,7 +77,9 @@ int main(int argc, char *argv[])
 #ifdef DISABLE_THREAD_MULTIPLE_CHECK
   MPI_Init(&argc, &argv);
 #else  
+  MPI_Init(&argc, &argv);
   // TODO: It would be nice to implement the equivalent of the below checks for SYCL
+
   // int max_threads;
   // max_threads = omp_get_max_threads();
 
@@ -89,7 +91,7 @@ int main(int argc, char *argv[])
   //         MPI_Abort(MPI_COMM_WORLD, -99);
   //     }
   // } else {
-  //     MPI_Init(&argc, &argv);
+  // MPI_Init(&argc, &argv);
   // }
 #endif
 
