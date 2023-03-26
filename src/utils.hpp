@@ -303,8 +303,6 @@ class LCG
 };
 
 // locks
-#ifdef USE_OPENMP_LOCK
-#else
 #ifdef USE_SPINLOCK 
 #include <atomic>
 std::atomic_flag lkd_ = ATOMIC_FLAG_INIT;
@@ -326,6 +324,5 @@ void unlock() {
     mtx_.unlock();
 #endif
 }
-#endif
 
 #endif // UTILS
