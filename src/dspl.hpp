@@ -53,7 +53,6 @@
 #include <map>
 
 #include <mpi.h>
-#include <omp.h>
 #include <CL/sycl.hpp>
 #include "graph.hpp"
 #include "utils.hpp"
@@ -94,7 +93,7 @@ typedef sycl::usm_allocator<std::unordered_set<GraphElem>, sycl::usm::alloc::sha
 // typedef sycl::usm_allocator<std::unordered_set<GraphElem, vec_ge_alloc>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 
 // Defined a SYCL queue using the CPU selector
-sycl::queue q{sycl::cpu_selector_v{}};
+sycl::queue q{sycl::cpu_selector_v};
 
 // we instantiate USM STL allocators (dependency on sycl::queue q)
 vec_gw_alloc vec_gw_allocator(q);
