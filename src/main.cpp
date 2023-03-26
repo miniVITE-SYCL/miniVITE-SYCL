@@ -50,7 +50,6 @@
 #include <sstream>
 #include <string>
 
-#include <omp.h>
 #include <mpi.h>
 
 #include "dspl.hpp"
@@ -78,20 +77,20 @@ int main(int argc, char *argv[])
 #ifdef DISABLE_THREAD_MULTIPLE_CHECK
   MPI_Init(&argc, &argv);
 #else  
-  int max_threads;
+  // TODO: It would be nice to implement the equivalent of the below checks for SYCL
+  // int max_threads;
+  // max_threads = omp_get_max_threads();
 
-  max_threads = omp_get_max_threads();
-
-  if (max_threads > 1) {
-      int provided;
-      MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-      if (provided < MPI_THREAD_MULTIPLE) {
-          std::cerr << "MPI library does not support MPI_THREAD_MULTIPLE." << std::endl;
-          MPI_Abort(MPI_COMM_WORLD, -99);
-      }
-  } else {
-      MPI_Init(&argc, &argv);
-  }
+  // if (max_threads > 1) {
+  //     int provided;
+  //     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+  //     if (provided < MPI_THREAD_MULTIPLE) {
+  //         std::cerr << "MPI library does not support MPI_THREAD_MULTIPLE." << std::endl;
+  //         MPI_Abort(MPI_COMM_WORLD, -99);
+  //     }
+  // } else {
+  //     MPI_Init(&argc, &argv);
+  // }
 #endif
 
   MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
