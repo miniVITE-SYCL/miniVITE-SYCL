@@ -149,7 +149,7 @@ GraphWeight distCalcConstantForSecondTerm(const std::vector<GraphWeight, vec_gw_
 
   auto _vDegree = vDegree.data();
   GraphWeight localWeight = 0;
-  GraphWeight *usm_localWeight = sycl::malloc_host<GraphWeight>(1, q);
+  GraphWeight *usm_localWeight = sycl::malloc_shared<GraphWeight>(1, q);
   *usm_localWeight = 0;
 
   q.submit([&](sycl::handler &h){
@@ -586,8 +586,8 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   auto _localCinfo = localCinfo.data();
   auto _clusterWeight = clusterWeight.data();
 
-  GraphWeight *_le_xx = sycl::malloc_host<GraphWeight>(1, q);
-  GraphWeight *_la2_x = sycl::malloc_host<GraphWeight>(1, q);
+  GraphWeight *_le_xx = sycl::malloc_shared<GraphWeight>(1, q);
+  GraphWeight *_la2_x = sycl::malloc_shared<GraphWeight>(1, q);
   *_le_xx = le_xx;
   *_la2_x = la2_x;
 
@@ -911,7 +911,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   int local_group_size = 4;
 
   // Ported to SYCL
-  GraphElem *_stcsz = sycl::malloc_host<GraphElem>(1, q);
+  GraphElem *_stcsz = sycl::malloc_shared<GraphElem>(1, q);
   *_stcsz = stcsz;
 
   auto _scsizes = scsizes.data();
@@ -944,7 +944,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   // SYCL Port
   auto _rcsizes = rcsizes.data();
 
-  GraphElem *_rtcsz = sycl::malloc_host<GraphElem>(1, q);
+  GraphElem *_rtcsz = sycl::malloc_shared<GraphElem>(1, q);
   *_rtcsz = rtcsz;
 
   // TODO: Replace explicit group size with default SYCL runtime group size selection
@@ -1217,7 +1217,7 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
   std::vector<std::vector<CommInfo>> remoteArray(nprocs);
   MPI_Comm gcomm = dg.get_comm();
   
-  // TODO: We can paralellize this now
+  // TODO: Parallelize this (authors notes)
   int counter = 0;
   for (auto iter = remoteCupdate.begin(); iter != remoteCupdate.end(); iter++) {
       const GraphElem i = counter;
@@ -1267,14 +1267,17 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
 #endif
 
   GraphElem rcnt = 0, scnt = 0;
-  auto _rcnt = sycl::malloc_host<GraphElem>(1, q);
-  auto _scnt = sycl::malloc_host<GraphElem>(1, q);
+  GraphElem *_rcnt = sycl::malloc_shared<GraphElem>(1, q);
+  GraphElem *_scnt = sycl::malloc_shared<GraphElem>(1, q);
   
   *_scnt = scnt;
   *_rcnt = rcnt;
 
+
+  // Ported to SYCL
   {
-    // Ported to SYCL
+    // NOTE: I've been unable to combine the below two into a
+    // double reduction without getting runtime errors
     int local_group_size = 4;
     auto _send_sz = send_sz.data();
     auto _recv_sz = recv_sz.data();
@@ -1395,9 +1398,7 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 
   std::vector<std::unordered_set<GraphElem>> parray(nprocs);
 
-  // TODO: Did not port the below into SYCL
-  // If there is time, we'll attempt to play around with a parallelized version
-  // It seems that for CPU, the below is faster than any workaround we come up with
+  // NOTE: Did not port the below into SYCL
   for (GraphElem i = 0; i < nv; i++) {
     GraphElem e0, e1;
 
@@ -1432,7 +1433,7 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
   GraphElem rsz_r = 0;
   
   // SYCL Port
-  GraphElem *_rsz_r = sycl::malloc_host<GraphElem>(1, q);
+  GraphElem *_rsz_r = sycl::malloc_shared<GraphElem>(1, q);
   *_rsz_r = rsz_r;
   auto _rsizes = rsizes.data();
 
