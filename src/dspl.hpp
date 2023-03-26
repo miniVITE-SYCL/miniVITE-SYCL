@@ -535,7 +535,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
 
 GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_alloc> &localCinfo,
-			     const std::vector<GraphWeight, vec_gw_alloc> &clusterWeight,
+			          const std::vector<GraphWeight, vec_gw_alloc> &clusterWeight,
 			     const GraphWeight constantForSecondTerm,
 			     const int me)
 {
@@ -639,13 +639,10 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
 
 void distUpdateLocalCinfo(std::vector<Comm, vec_comm_alloc> &localCinfo, const std::vector<Comm, vec_comm_alloc> &localCupdate)
 {
-  size_t csz = localCinfo.size();
 
-  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
-  std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
-
-  auto _localCinfo = usm_localCinfo.data();
-  auto _localCupdate = usm_localCupdate.data();
+  auto _localCinfo = localCinfo.data();
+  auto _localCupdate = localCupdate.data();
+  GraphElem csz = localCinfo.size();
 
   q.submit([&](sycl::handler &h){
     h.parallel_for(csz, [=](sycl::id<1> i){
@@ -653,9 +650,6 @@ void distUpdateLocalCinfo(std::vector<Comm, vec_comm_alloc> &localCinfo, const s
       _localCinfo[i].degree += _localCupdate[i].degree;
     });
   }).wait();
-
-  std::memcpy(localCinfo.data(), usm_localCinfo.data(), usm_localCinfo.size() * sizeof(Comm));
-  // localCupdate is not updated -- check const above
 }
 
 void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight, vec_gw_alloc> &clusterWeight, std::vector<Comm, vec_comm_alloc> &localCupdate)
@@ -1213,8 +1207,8 @@ void destroyCommunityMPIType()
 } // destroyCommunityMPIType
 
 void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> &localCinfo,
-			     const std::vector<Comm, vec_comm_alloc> &remoteCupdate,
-			     const int me, const int nprocs)
+			                      const std::vector<Comm, vec_comm_alloc> &remoteCupdate,
+			                      const int me, const int nprocs)
 {
   const GraphElem base = dg.get_base(me), bound = dg.get_bound(me);
   std::vector<std::vector<CommInfo>> remoteArray(nprocs);
@@ -1250,23 +1244,16 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
   const double t0 = MPI_Wtime();
 #endif
 
-
-  // Ported to SYCL
   {
-    std::vector<GraphElem, vec_ge_alloc> usm_send_sz(send_sz.begin(), send_sz.end(), vec_ge_allocator);
-    std::vector<std::vector<CommInfo>, vec_vec_commi_alloc> usm_remoteArray(remoteArray.begin(), remoteArray.end(), vec_vec_commi_allocator);
-    auto _send_sz = usm_send_sz.data();
-    auto _remoteArray = usm_remoteArray.data();
+    // Ported to SYCL
+    auto _send_sz = send_sz.data();
+    auto _remoteArray = remoteArray.data();
     q.submit([&](sycl::handler &h){
       h.parallel_for(nprocs, [=](sycl::id<1> i){
         _send_sz[i] = _remoteArray[i].size();
       });
     }).wait();
-
-    std::memcpy(send_sz.data(), usm_send_sz.data(), usm_send_sz.size() *sizeof(GraphElem));
-    // End of Port
   }
-
 
   MPI_Alltoall(send_sz.data(), 1, MPI_GRAPH_TYPE, recv_sz.data(), 
           1, MPI_GRAPH_TYPE, gcomm);
@@ -1283,13 +1270,11 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
   *_scnt = scnt;
   *_rcnt = rcnt;
 
-  // Porting to SYCL
   {
+    // Ported to SYCL
     int local_group_size = 4;
-    std::vector<GraphElem, vec_ge_alloc> usm_recv_sz(recv_sz.begin(), recv_sz.end(), vec_ge_allocator);
-    std::vector<GraphElem, vec_ge_alloc> usm_send_sz(send_sz.begin(), send_sz.end(), vec_ge_allocator);
-    auto _send_sz = usm_send_sz.data();
-    auto _recv_sz = usm_recv_sz.data();
+    auto _send_sz = send_sz.data();
+    auto _recv_sz = recv_sz.data();
 
     q.submit([&](sycl::handler &h){
       h.parallel_for(
@@ -1368,23 +1353,23 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
 #endif
 
 
-// SYCL port
-std::vector<CommInfo, vec_commi_alloc> usm_rdata(rdata.begin(), rdata.end(), vec_commi_allocator);
-auto _localCinfo = localCinfo.data();
-auto _rdata = usm_rdata.data();
+  {
+    // Ported to SYCL
+    auto _localCinfo = localCinfo.data();
+    auto _rdata = rdata.data();
 
-q.submit([&](sycl::handler &h){
-  h.parallel_for(rcnt, [=](sycl::id<1> i){
-    const CommInfo &curr = _rdata[i];
-#ifdef DEBUG_PRINTF  
-    assert(dg.get_owner(curr.community) == me);
-#endif
-    _localCinfo[curr.community-base].size += curr.size;
-    _localCinfo[curr.community-base].degree += curr.degree;
-  });
-}).wait();
+    q.submit([&](sycl::handler &h){
+      h.parallel_for(rcnt, [=](sycl::id<1> i){
+        const CommInfo &curr = _rdata[i];
+    #ifdef DEBUG_PRINTF  
+        assert(dg.get_owner(curr.community) == me);
+    #endif
+        _localCinfo[curr.community-base].size += curr.size;
+        _localCinfo[curr.community-base].degree += curr.degree;
+      });
+    }).wait();
+  }
 
-// End port
 
 } // updateRemoteCommunities
 
@@ -1663,20 +1648,15 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
                                     localCupdate, remoteComm, remoteCinfo, remoteCupdate,
                                     constantForSecondTerm, clusterWeight, me);
 
+
+    // Ported to SYCL
+    distUpdateLocalCinfo(localCinfo, localCupdate);
+
+    // Ported to SYCL
+    updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
     break;
   }
 
-//     // Ported to SYCL
-//     // std::cout << "distUpdateLocalCinfo" << std::endl;
-//     // MPI_Barrier(MPI_COMM_WORLD);
-//     distUpdateLocalCinfo(localCinfo, localCupdate);
-
-//     // std::cout << "updateRemoteCommunities" << std::endl;
-//     // MPI_Barrier(MPI_COMM_WORLD);
-//     updateRemoteCommunities(dg, localCinfo, remoteCupdate, me, nprocs);
-
-//     // std::cout << "Compute modularity" << std::endl;
-//     // MPI_Barrier(MPI_COMM_WORLD);
 //     currMod = distComputeModularity(dg, localCinfo, clusterWeight, constantForSecondTerm, me);
 
 //     // exit criteria
