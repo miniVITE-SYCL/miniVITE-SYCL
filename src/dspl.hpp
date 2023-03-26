@@ -230,7 +230,7 @@ void distInitLouvain(const Graph &dg, std::vector<GraphElem, vec_ge_alloc> &past
   
 } // distInitLouvain
 
-GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap, 
+GraphElem distGetMaxIndex(const std::vector<GraphElem> &clmap, 
                               const std::vector<GraphWeight> &counter,
 			                        const GraphWeight selfLoop, 
                               const Comm localCinfo[], 
@@ -295,7 +295,7 @@ GraphElem sycl_distGetMaxIndex(const std::vector<GraphElem> &clmap,
   return maxIndex;
 } // distGetMaxIndex
 
-GraphWeight sycl_distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
+GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
                                     std::vector<GraphElem> &clmap, 
 				                            std::vector<GraphWeight> &counter, 
                                     GraphElem &counter_size,
@@ -358,50 +358,29 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
                                       std::vector<Comm, vec_comm_alloc> &remoteCupdate, const GraphWeight constantForSecondTerm,
                                       std::vector<GraphWeight, vec_gw_alloc> &clusterWeight, const int me){
 
-  // std::cout << "distExecuteLouvainIteration() method call" << std::endl;
-  // MPI_Barrier(MPI_COMM_WORLD);
-
-  // USM allocation for std::vectors
-  std::vector<GraphElem, vec_ge_alloc> usm_currComm(currComm.begin(), currComm.end(), vec_ge_allocator);
-  std::vector<GraphElem, vec_ge_alloc> usm_targetComm(targetComm.begin(), targetComm.end(), vec_ge_allocator);
-  std::vector<GraphWeight, vec_gw_alloc> usm_vDegree(vDegree.begin(), vDegree.end(), vec_gw_allocator);
-  // NOTE: `localCinfo` and `localCupdate` both use vectors, so why can't `remoteCinfo` and `remoteCupdate`
-  // std::cout << localCupdate.size() << std::endl;
-  std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
-  // std::cout << usm_localCupdate.size() << std::endl;
-  std::vector<Comm, vec_comm_alloc> usm_localCinfo(localCinfo.begin(), localCinfo.end(), vec_comm_allocator);
-
-  // remaining vectors ...
-  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
-  std::vector<GraphElem, vec_ge_alloc> usm_remoteComm(remoteComm.begin(), remoteComm.end(), vec_ge_allocator);
-  std::vector<Comm, vec_comm_alloc> usm_remoteCinfo(remoteCinfo.begin(), remoteCinfo.end(), vec_comm_allocator);
-  std::vector<Comm, vec_comm_alloc> usm_remoteCupdate(remoteCupdate.begin(), remoteCupdate.end(), vec_comm_allocator);
 
   // Access to underlying memory blocks for vectors
-  auto _currComm = usm_currComm.data();
-  auto _targetComm = usm_targetComm.data();
-  auto _vDegree = usm_vDegree.data();
-  auto _localCinfo = usm_localCinfo.data();
-  auto _clusterWeight = usm_clusterWeight.data();
-  auto _remoteComm = usm_remoteComm.data();
-  auto _remoteCinfo = usm_remoteCinfo.data();
-  auto _remoteCupdate = usm_remoteCupdate.data();
+  auto _currComm = currComm.data();
+  auto _targetComm = targetComm.data();
+  auto _vDegree = vDegree.data();
+  auto _localCinfo = localCinfo.data();
+  auto _clusterWeight = clusterWeight.data();
+  auto _remoteComm = remoteComm.data();
+  auto _remoteCinfo = remoteCinfo.data();
+  auto _remoteCupdate = remoteCupdate.data();
+  auto _localCupdate = localCupdate.data();
 
-  // auto _localCupdate = usm_localCupdate;
-  auto _localCupdate = usm_localCupdate.data();
-  int _localCupdateSize = usm_localCupdate.size();
+  int _localCupdateSize = localCupdate.size();
+  int _vDegreeSize = vDegree.size();
+  int _clusterWeightSize = clusterWeight.size();
+  int _currCommSize = currComm.size();
+  int _remoteCommSize = remoteComm.size();
+  int _targetCommSize = targetComm.size();
+  int _remoteCupdateSize = remoteCupdate.size();
+  int _localCinfoSize = localCinfo.size();
+  int _remoteCinfoSize = remoteCinfo.size();
 
-  int _vDegreeSize = usm_vDegree.size();
-  int _clusterWeightSize = usm_clusterWeight.size();
-  int _currCommSize = usm_currComm.size();
-  int _remoteCommSize = usm_remoteComm.size();
-  int _targetCommSize = usm_targetComm.size();
-  int _remoteCupdateSize = usm_remoteCupdate.size();
-  int _localCinfoSize = usm_localCinfo.size();
-  int _remoteCinfoSize = usm_remoteCinfo.size();
-  // create private copies (Is it nececssary?)
   const Graph *_dg = &dg;
-
 
   q.submit([&](sycl::handler &h){
     sycl::stream out(1024, 256, h);
@@ -455,25 +434,25 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         counter_size++;
 
         // modified counter, counter_size, clmap
-        selfLoop =  sycl_distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
+        selfLoop =  distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
                                                   _currComm, _currCommSize, _remoteComm, _remoteCommSize, i, base, bound);
 
         assert (0 <= i && i < _clusterWeightSize);
         _clusterWeight[i] += counter[0];
 
         // no modifications
-        localTarget = sycl_distGetMaxIndex(clmap, counter, selfLoop, _localCinfo, _remoteCinfo, 
+        localTarget = distGetMaxIndex(clmap, counter, selfLoop, _localCinfo, _remoteCinfo, 
                         _vDegree[i], ccSize, ccDegree, cc, base, bound, constantForSecondTerm);
       }
       else
         localTarget = cc;
 
-      // out << "vertex: " << i << ", target: " << localTarget << ", selfLoop: " << selfLoop << sycl::endl;
-      assert (0 <= localTarget);
 
-      // create atomic references (replaces #omp pragma atomic update)
+      assert (0 <= localTarget);
       assert( 0 <= (cc - base) && (cc - base) < _localCupdateSize); 	
       assert( 0 <= (localTarget - base) && (localTarget - base) < _localCupdateSize); 
+
+      // create atomic references (replaces #omp pragma atomic update)
       sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
       sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_size(_localCupdate[localTarget-base].size);
       sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_degree(_localCupdate[cc-base].degree);
@@ -551,29 +530,6 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
     });
   }).wait(); 
-
-  
-  // std::cout << "finished executing kernel" << std::endl;
-  // MPI_Barrier(MPI_COMM_WORLD);
-  memcpy(targetComm.data(), usm_targetComm.data(), usm_targetComm.size() * sizeof(GraphElem));
-  memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
-  memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
-
-  // std::cout << "finished copying memory" << std::endl;
-  // MPI_Barrier(MPI_COMM_WORLD);
-
-  usm_localCupdate.clear();
-  usm_currComm.clear();
-  usm_targetComm.clear();
-  usm_vDegree.clear();
-  usm_localCinfo.clear();
-  usm_clusterWeight.clear();
-  usm_remoteComm.clear();
-  usm_remoteCinfo.clear();
-  usm_remoteCupdate.clear();
-
-
-  // This happens on std::vector<Comm, ...> usm_localCupdate
 
 }
 
@@ -1700,14 +1656,12 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
 #endif
 
     // Ported to SYCL
-    // std::cout << "Cleaning CW and CU" << std::endl;
-    // MPI_Barrier(MPI_COMM_WORLD);
     distCleanCWandCU(nv, clusterWeight, localCupdate);
 
-    // // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
-    // distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
-    //                                 localCupdate, remoteComm, remoteCinfo, remoteCupdate,
-    //                                 constantForSecondTerm, clusterWeight, me);
+    // Ported to SYCL
+    distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
+                                    localCupdate, remoteComm, remoteCinfo, remoteCupdate,
+                                    constantForSecondTerm, clusterWeight, me);
 
     break;
   }
