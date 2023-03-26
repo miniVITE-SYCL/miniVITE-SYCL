@@ -704,13 +704,9 @@ void distUpdateLocalCinfo(std::vector<Comm, vec_comm_alloc> &localCinfo, const s
 
 void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight, vec_gw_alloc> &clusterWeight, std::vector<Comm, vec_comm_alloc> &localCupdate)
 {
-  // We provide local SYCL USM constructs
-  std::vector<GraphWeight, vec_gw_alloc> usm_clusterWeight(clusterWeight.begin(), clusterWeight.end(), vec_gw_allocator);
-  std::vector<Comm, vec_comm_alloc> usm_localCupdate(localCupdate.begin(), localCupdate.end(), vec_comm_allocator);
-
   // we create pointers to underlying data
-  auto _clusterWeight = usm_clusterWeight.data();
-  auto _localCupdate = usm_localCupdate.data();
+  auto _clusterWeight = clusterWeight.data();
+  auto _localCupdate = localCupdate.data();
 
   q.submit([&](sycl::handler &h){
     h.parallel_for(nv, [=](sycl::id<1> i){
@@ -719,10 +715,6 @@ void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight, vec_gw_alloc>
       _localCupdate[i].size = 0;
     });
   }).wait();
-
-  std::memcpy(clusterWeight.data(), usm_clusterWeight.data(), usm_clusterWeight.size() * sizeof(GraphWeight));
-  std::memcpy(localCupdate.data(), usm_localCupdate.data(), usm_localCupdate.size() * sizeof(Comm));
-
 
 } // distCleanCWandCU
 
@@ -1691,10 +1683,9 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
             rsizes, svdata, rvdata, currComm, localCinfo, 
             remoteCinfo, remoteComm, remoteCupdate);
 #endif
-    break;
-  }
-//     //std::cout "Executed fillRemoteCommunities(...) " << std::endl;
-//     // MPI_Barrier(MPI_COMM_WORLD);
+
+    //std::cout "Executed fillRemoteCommunities(...) " << std::endl;
+    // MPI_Barrier(MPI_COMM_WORLD);
 
 // #ifdef DEBUG_PRINTF  
 //     t1 = MPI_Wtime();
@@ -1704,20 +1695,22 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
 //     std::cout << "[" << me << "]Iteration communication time: " << (t1 - t0) << std::endl;
 // #endif
 
-// #ifdef DEBUG_PRINTF  
-//     t0 = MPI_Wtime();
-// #endif
+#ifdef DEBUG_PRINTF  
+    t0 = MPI_Wtime();
+#endif
 
-//     // Ported to SYCL
-//     // std::cout << "Cleaning CW and CU" << std::endl;
-//     // MPI_Barrier(MPI_COMM_WORLD);
-//     distCleanCWandCU(nv, clusterWeight, localCupdate);
+    // Ported to SYCL
+    // std::cout << "Cleaning CW and CU" << std::endl;
+    // MPI_Barrier(MPI_COMM_WORLD);
+    distCleanCWandCU(nv, clusterWeight, localCupdate);
 
-//     // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
-//     distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
-//                                     localCupdate, remoteComm, remoteCinfo, remoteCupdate,
-//                                     constantForSecondTerm, clusterWeight, me);
+    // // NOTE: The distExecuteLouvain Iteration cannot be ported until we complete the following
+    // distExecuteLouvainIteration(nv, dg, currComm, targetComm, vDegree, localCinfo, 
+    //                                 localCupdate, remoteComm, remoteCinfo, remoteCupdate,
+    //                                 constantForSecondTerm, clusterWeight, me);
 
+    break;
+  }
 
 //     // Ported to SYCL
 //     // std::cout << "distUpdateLocalCinfo" << std::endl;
