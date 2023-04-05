@@ -10,5 +10,5 @@ RUN apt-get install vim gdb valgrind -yy
 
 WORKDIR /workspace
 COPY . /workspace/miniVITE-SYCL/
-
+RUN mv /workspace/miniVITE-SYCL/miniVite /workspace/
 CMD ["/bin/bash"]
