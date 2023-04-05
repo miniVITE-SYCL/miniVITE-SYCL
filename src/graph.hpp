@@ -129,8 +129,8 @@ class Graph
         void set_edge_index(GraphElem const vertex, GraphElem const e0)
         {
 #if defined(DEBUG_BUILD)
-            assert((vertex >= 0) && (vertex <= lnv_));
-            assert((e0 >= 0) && (e0 <= lne_));
+            assert((vertex >= 0) && (vertex <= nv_));
+            assert((e0 >= 0) && (e0 <= ne_));
             edge_indices_.at(vertex) = e0;
 #else
             edge_indices_[vertex] = e0;
