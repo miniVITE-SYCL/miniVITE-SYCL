@@ -85,10 +85,9 @@ typedef sycl::usm_allocator<GraphElem, sycl::usm::alloc::shared> vec_ge_alloc;
 typedef sycl::usm_allocator<bool, sycl::usm::alloc::shared> vec_bool_alloc;
 typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
 typedef sycl::usm_allocator<CommInfo, sycl::usm::alloc::shared> vec_commi_alloc;
-typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
 typedef sycl::usm_allocator<int, sycl::usm::alloc::shared> vec_int_alloc;
-typedef sycl::usm_allocator<vec_ge_alloc, sycl::usm::alloc::shared> vec_vec_ge_alloc;
-typedef sycl::usm_allocator<vec_bool_alloc, sycl::usm::alloc::shared> vec_vec_bool_alloc;
+typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
+typedef sycl::usm_allocator<std::vector<GraphElem>, sycl::usm::alloc::shared> vec_vec_ge_alloc;
 typedef sycl::usm_allocator<std::unordered_set<GraphElem>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 // typedef sycl::usm_allocator<std::unordered_set<GraphElem, vec_ge_alloc>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 
@@ -104,8 +103,6 @@ vec_vec_commi_alloc vec_vec_commi_allocator(q);
 vec_int_alloc vec_int_allocator(q);
 vec_vec_ge_alloc vec_vec_ge_allocator(q);
 vec_uset_ge_alloc vec_uset_ge_allocator(q);
-vec_vec_bool_alloc vec_vec_bool_allocator(q);
-
 
 void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
 {
