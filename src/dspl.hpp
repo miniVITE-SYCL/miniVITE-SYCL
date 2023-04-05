@@ -473,10 +473,10 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 #endif
 
       // create atomic references (replaces #omp pragma atomic update)
-      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
-      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_size(_localCupdate[localTarget-base].size);
-      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_degree(_localCupdate[cc-base].degree);
-      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_size(_localCupdate[cc-base].size);
+      sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
+      sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> localTarget_base_size(_localCupdate[localTarget-base].size);
+      sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> cc_base_degree(_localCupdate[cc-base].degree);
+      sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> cc_base_size(_localCupdate[cc-base].size);
       
       // is the Target Local?
       if (localTarget >= base && localTarget < bound)
@@ -505,8 +505,8 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
         // search target!
         Comm target_comm = _remoteCupdate[localTarget];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_size(target_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_size(target_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
         
         target_comm_degree += _vDegree[i];
         target_comm_size++;
@@ -523,8 +523,8 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
       
         // search current 
         Comm current_comm = _remoteCupdate[cc];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_size(current_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
         
         current_comm_degree -= _vDegree[i];
         current_comm_size--;
@@ -538,16 +538,16 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 #endif
         // search current 
         Comm current_comm = _remoteCupdate[cc];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_size(current_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
 
         current_comm_degree -= _vDegree[i];
         current_comm_size--;
   
         // search target
         Comm target_comm = _remoteCupdate[localTarget];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_size(target_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_size(target_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
         
         target_comm_degree += _vDegree[i];
         target_comm_size++;
