@@ -85,10 +85,9 @@ typedef sycl::usm_allocator<GraphElem, sycl::usm::alloc::shared> vec_ge_alloc;
 typedef sycl::usm_allocator<bool, sycl::usm::alloc::shared> vec_bool_alloc;
 typedef sycl::usm_allocator<Comm, sycl::usm::alloc::shared> vec_comm_alloc;
 typedef sycl::usm_allocator<CommInfo, sycl::usm::alloc::shared> vec_commi_alloc;
-typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
 typedef sycl::usm_allocator<int, sycl::usm::alloc::shared> vec_int_alloc;
-typedef sycl::usm_allocator<vec_ge_alloc, sycl::usm::alloc::shared> vec_vec_ge_alloc;
-typedef sycl::usm_allocator<vec_bool_alloc, sycl::usm::alloc::shared> vec_vec_bool_alloc;
+typedef sycl::usm_allocator<std::vector<CommInfo>, sycl::usm::alloc::shared> vec_vec_commi_alloc;
+typedef sycl::usm_allocator<std::vector<GraphElem>, sycl::usm::alloc::shared> vec_vec_ge_alloc;
 typedef sycl::usm_allocator<std::unordered_set<GraphElem>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 // typedef sycl::usm_allocator<std::unordered_set<GraphElem, vec_ge_alloc>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 
@@ -104,8 +103,6 @@ vec_vec_commi_alloc vec_vec_commi_allocator(q);
 vec_int_alloc vec_int_allocator(q);
 vec_vec_ge_alloc vec_vec_ge_allocator(q);
 vec_uset_ge_alloc vec_uset_ge_allocator(q);
-vec_vec_bool_alloc vec_vec_bool_allocator(q);
-
 
 void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> &vDegree, std::vector<Comm, vec_comm_alloc> &localCinfo, sycl::queue &q)
 {
@@ -476,10 +473,10 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 #endif
 
       // create atomic references (replaces #omp pragma atomic update)
-      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
-      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> localTarget_base_size(_localCupdate[localTarget-base].size);
-      sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_degree(_localCupdate[cc-base].degree);
-      sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> cc_base_size(_localCupdate[cc-base].size);
+      sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> localTarget_base_degree(_localCupdate[localTarget-base].degree);
+      sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> localTarget_base_size(_localCupdate[localTarget-base].size);
+      sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> cc_base_degree(_localCupdate[cc-base].degree);
+      sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> cc_base_size(_localCupdate[cc-base].size);
       
       // is the Target Local?
       if (localTarget >= base && localTarget < bound)
@@ -508,8 +505,8 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
         // search target!
         Comm target_comm = _remoteCupdate[localTarget];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_size(target_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_size(target_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
         
         target_comm_degree += _vDegree[i];
         target_comm_size++;
@@ -526,8 +523,8 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
       
         // search current 
         Comm current_comm = _remoteCupdate[cc];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_size(current_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
         
         current_comm_degree -= _vDegree[i];
         current_comm_size--;
@@ -541,16 +538,16 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 #endif
         // search current 
         Comm current_comm = _remoteCupdate[cc];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_size(current_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_size(current_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> current_comm_degree(current_comm.degree);
 
         current_comm_degree -= _vDegree[i];
         current_comm_size--;
   
         // search target
         Comm target_comm = _remoteCupdate[localTarget];
-        sycl::atomic_ref<GraphElem, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_size(target_comm.size);
-        sycl::atomic_ref<GraphWeight, sycl::memory_order::seq_cst, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
+        sycl::atomic_ref<GraphElem, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_size(target_comm.size);
+        sycl::atomic_ref<GraphWeight, sycl::memory_order::relaxed, sycl::memory_scope::system> target_comm_degree(target_comm.degree);
         
         target_comm_degree += _vDegree[i];
         target_comm_size++;
