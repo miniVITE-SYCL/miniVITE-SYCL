@@ -41,6 +41,7 @@
 
 
 import os
+import json
 import subprocess
 import itertools
 from numbers import Number
@@ -283,26 +284,23 @@ class Validator:
 
             results[configKey] = self._validateConfig(graphConfig, computeConfig)
             print(results[configKey])
-        ## We perform analysis on the results
-        ...
 
-        ## We then store the results and analysis
-        ...
 
-        ## We then print out the results
-        ...
-        
+        ## We then output the results
+        with open(self.results_location, "w+") as outfile:
+            json.dump(results, outfile)
+
+        return None
+
+
+    def analyse(self) -> None:
         raise NotImplementedError()
-
-
-
-
-
 
 
 def main():
     v = Validator()
     v.run()
+    v.analyse()
 
 
 
