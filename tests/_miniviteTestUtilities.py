@@ -32,13 +32,13 @@
 import os
 import abc
 import json
+import copy
 import subprocess
 import itertools
 from numbers import Number
 from typing import List, Tuple, Dict, Optional, Iterator, Any, TypeVar
 
 config = TypeVar(Dict[str, Any])
-
 
 class MiniviteVariantTester(metaclass=abc.ABCMeta):
     sycl_source_dir: str = os.path.join("..")
@@ -67,6 +67,14 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         "-DDEBUG_PRINTF",
         "-DDEBUG_ASSERTIONS",
     )
+
+    resultFormat = {
+        "Average Total Time (in s)": [],
+        "Processes" : [],
+        "Modularity" : [],
+        "Iterations" : [],
+        "MODS" : []
+    }
 
     def _createComputeParamRange(self, computeConfig: config) -> Iterator[Dict[str, int]]:
         ## This generates a graph param range to generate based on user arguments
@@ -172,15 +180,18 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         ompBinaryExecuteCommand = f"{execContext} {ompBinaryPath} {inputArgs}"
         return ompBinaryExecuteCommand, syclBinaryExecuteCommand
 
-    def _executeCommand(self, binaryExecuteCommand: str) -> Optional[Dict]:
+
+    def _executeCommand(self, binaryExecuteCommand: str) -> Dict[str, Optional[Number]]:
         ## This executes a command extracts the results from stdout
         out = subprocess.run(binaryExecuteCommand, capture_output=True, shell=True)
         if out.returncode == 0:
             results = self._extractResults(out.stdout.decode())
-            return results
         else:
             print(f"Execution Failed: {out.stderr}")
-            return None
+            ## We return an results dictionary with Nonetype dict values
+            results = dict(self.resultFormat.keys(), None)
+
+        return results
 
     ## TODO: Upgrade to a namedtuple
     def _createConfigKey(self, graphConfig: config, compileConfig: config, computeConfig: config) -> Tuple[Tuple, Tuple, Tuple]:
@@ -195,12 +206,77 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         configKey.append(tuple(sorted(computeConfig.items())))
         return tuple(configKey)
 
+    def _performTest(self, graphConfig: config, computeConfig: config, repeats: int) -> Tuple[Dict[str, List[Number]], Dict[str, List[Number]]]:
+        totalResults = {
+            "OpenMP": copy.deepcopy(self.resultFormat), 
+            "SYCL": copy.deepcopy(self.resultFormat)
+        }
+
+        ## This validates a config by executing it a SYCL and OpenMP version of miniVITE a certain number of times
+        modularity = {"OpenMP": [], "SYCL": []}
+        iterations = {"OpenMP": [], "SYCL": []}
+
+        ompBinaryExecuteCommand, syclBinaryExecuteCommand = \
+        self._createProgramExecCommands(graphConfig, computeConfig)
+
+        ## NOTE: We need to setup the environmental variable every time in case they get wiped
+        ## or any future env variable's value is changed
+        for _ in range(repeats):
+            numThreads = computeConfig.get("MAX_NUM_THREADS")
+
+            ## Execute OpenMP
+            if numThreads is not None:
+                os.environ["OMP_NUM_THREADS"] = str(numThreads)
+
+            print(f"Executing OpenMP version: {ompBinaryExecuteCommand}")
+            results = self._executeCommand(ompBinaryExecuteCommand)
+            for k, v in results.items():
+                totalResults["OpenMP"][k].append(v)
+
+            ## Execute SYCL version
+            ## BUG: SYCL_NUM_THREADS env variable needs to be used in the SYCL-based miniVITE codebase.
+            if numThreads is not None:
+                os.environ["SYCL_NUM_THREADS"] = str(numThreads)
+
+            print(f"Executing SYCL version: {syclBinaryExecuteCommand}")
+            results = self._executeCommand(syclBinaryExecuteCommand)
+            for k, v in results.items():
+                totalResults["SYCL"][k].append(v)
+
+        return totalResults
+
+    def _run(self, verbose=True) -> None:
+        ## We first setup the range of parameters for both the graph and compute environment
+        graphInputParamRange = self._createGraphParamRange(self.defaultGraphInputConfig)
+        computeParamRange = self._createComputeParamRange(self.defaultComputeConfig)
+        compileParamRange = self._createCompileParamRange()
+
+        ## We then start running each of these instances
+        results: Dict[Tuple, Tuple] = {}
+        prevCompileConfig = None
+        for compileConfig, graphConfig, computeConfig in itertools.product(compileParamRange, graphInputParamRange, computeParamRange):
+            configKey = self._createConfigKey(graphConfig, compileConfig, computeConfig)
+            if prevCompileConfig != compileConfig:
+                prevCompileConfig = compileConfig
+                self._compileConfig(compileConfig)
+
+            results[configKey] = self._collectTestResults(graphConfig, computeConfig)
+            print(results[configKey])
+
+        ## We then output the results
+        with open(self.results_location, "w+") as outfile:
+            json.dump(results, outfile)
+
+        return None
+
+    def run(self, *args, **kwargs) -> None:
+        self._run()
 
     @abc.abstractmethod
-    def _performTest(self, graphConfig: config, computeConfig: config) -> Any: ...
-
-    @abc.abstractmethod
-    def run(self) -> None: ...
+    def _collectTestResults(self, graphConfig: config, computeConfig: config) -> Any:
+        """This method is used to intercept results for the sake of structuring them
+        before passing the results back to the run() method"""
+        return self._performTest(graphConfig, computeConfig)
 
     @abc.abstractmethod
     def analyse(self) -> None: ...
