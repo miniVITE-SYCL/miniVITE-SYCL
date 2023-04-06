@@ -50,6 +50,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
     omp_binary_name: str = "miniVite"
 
     MPIFlags = (
+        None, 
         "-DUSE_MPI_RMA",
         "-DUSE_MPI_RMA -DUSE_MPI_ACCUMULATE"
         "-DUSE_MPI_COLLECTIVES",
@@ -103,7 +104,11 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
             for length in range(len(inclusiveFlags)+1):
                 for x in itertools.combinations(inclusiveFlags, length):
                     inclusiveFlagsSelected = " ".join(x)
-                    yield f"{MPIFlag} {inclusiveFlagsSelected}"
+                    makeArgs = ""
+                    if MPIFlag is not None:
+                        makeArgs += f"{MPIFlag} "
+                    makeArgs += inclusiveFlagsSelected
+                    yield makeArgs
 
     def _extractResults(self, stdout: str) -> config:
         ## We want to extract all the results and format it into a config
@@ -222,11 +227,13 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         ## NOTE: We need to setup the environmental variable every time in case they get wiped
         ## or any future env variable's value is changed
         for _ in range(repeats):
-            numThreads = computeConfig.get("MAX_NUM_THREADS")
+            numThreads = computeConfig["MAX_NUM_THREADS"]
 
             ## Execute OpenMP
             if numThreads is not None:
                 os.environ["OMP_NUM_THREADS"] = str(numThreads)
+            else:
+                del os.environ["OMP_NUM_THREADS"]
 
             print(f"Executing OpenMP version: {ompBinaryExecuteCommand}")
             results = self._executeCommand(ompBinaryExecuteCommand)
@@ -237,6 +244,8 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
             ## BUG: SYCL_NUM_THREADS env variable needs to be used in the SYCL-based miniVITE codebase.
             if numThreads is not None:
                 os.environ["SYCL_NUM_THREADS"] = str(numThreads)
+            else:
+                del os.environ["SYCL_NUM_THREADS"]
 
             print(f"Executing SYCL version: {syclBinaryExecuteCommand}")
             results = self._executeCommand(syclBinaryExecuteCommand)
