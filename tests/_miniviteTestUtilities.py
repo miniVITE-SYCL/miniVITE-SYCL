@@ -28,11 +28,12 @@
 # DEBUG_BUILD
 # USE_32_BIT_GRAPH
 
-
 import os
 import abc
+import ast
 import json
 import copy
+import pprint
 import subprocess
 import itertools
 from numbers import Number
@@ -270,13 +271,32 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
                 self._compileConfig(compileConfig)
 
             results[configKey] = self._collectTestResults(graphConfig, computeConfig)
-            print(results[configKey])
 
         ## We then output the results
+        self._writeResults(results)
+        return None
+
+    def _writeResults(self, results: Dict[Tuple, Dict]) -> None:
+        resultsToDump = {}
+        for key, value in results.items():
+            newKey = json.dumps(key).replace("[", "(").replace("]", ")")
+            resultsToDump[newKey] = results[key]
+
         with open(self.results_location, "w+") as outfile:
-            json.dump(results, outfile)
+            json.dump(resultsToDump, outfile)
 
         return None
+
+    def _loadResults(self) -> Dict[Tuple, Dict]:
+        with open(self.results_location, "r") as infile:
+            resultsToLoad = json.load(infile)
+
+        results = {}
+        for key, value in resultsToLoad.items():
+            newKey = ast.literal_eval(key.replace("null", "None"))
+            results[newKey]  = resultsToLoad[key]
+
+        return results
 
     def run(self, *args, **kwargs) -> None:
         self._run()

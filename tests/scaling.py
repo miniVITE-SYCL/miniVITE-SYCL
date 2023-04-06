@@ -1,13 +1,10 @@
-import os
-import abc
 import json
-import subprocess
-import itertools
+import ast
 from numbers import Number
 from typing import List, Tuple, Dict, Optional, Iterator, Any, TypeVar
 
+from matpotlib import pyplot as plt
 from _miniviteTestUtilities import MiniviteVariantTester, config
-from copy import deepcopy
 
 
 class MinivitePerformanceValidator(MiniviteVariantTester):
@@ -38,7 +35,7 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
     ## 63 options
     defaultComputeConfig = {
         "MAX_MPI_RANKS": [None],
-        "MAX_NUM_THREADS": [1] + list(range(2, 129, 2)),
+        "MAX_NUM_THREADS": [1] + list(range(2, 3, 2)),
     }
 
     ## 2 options for compile options
@@ -51,13 +48,15 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
     ## 30 executions
     defaultGraphInputConfig = {
         "kwargs": {
-            "-n": range(1000, 30001, 1000),
+            "-n": range(1000, 1001, 1000),
         },
         "args": [None,]
     }
 
     def analyse(self) -> None:
+        results = self._loadResults()
         raise NotImplementedError()
+
 
 
 
