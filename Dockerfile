@@ -1,6 +1,10 @@
 FROM intel/oneapi-hpckit
 RUN apt-get update -yy
 RUN apt-get install vim gdb valgrind -yy
+RUN apt-get update -yy
+RUN apt-get install eom -yy
+RUN apt-get install python3-pip -yy
+
 ## No copying of source files is performed
 ## During dev, I prefer to mount my own directories
 
@@ -11,4 +15,5 @@ RUN apt-get install vim gdb valgrind -yy
 WORKDIR /workspace
 COPY . /workspace/miniVITE-SYCL/
 RUN mv /workspace/miniVITE-SYCL/miniVite /workspace/
+RUN python3 -m pip install -r /workspace/miniVITE-SYCL/requirements.txt
 CMD ["/bin/bash"]

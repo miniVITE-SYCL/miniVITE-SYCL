@@ -89,7 +89,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         kwargParamRange = itertools.product(*graphInputConfig["kwargs"].values())
         argParamRange = itertools.product(graphInputConfig["args"])
         for kwargVal in kwargParamRange:
-            for argVal in argParamRange:
+            for argVal in copy.deepcopy(argParamRange):
                 config = {}
                 config["kwargs"] = dict(sorted(zip(graphInputConfig["kwargs"].keys(), kwargVal)))
                 config["args"] = sorted(graphInputConfig["args"])
@@ -204,8 +204,8 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         configKey = []
 
         _graphKey = []
-        _graphKey.append(("args", (tuple(sorted(graphConfig["args"])))))
-        _graphKey.append(("kwargs", (tuple(sorted(graphConfig["kwargs"].items())))))
+        _graphKey.append(("args", tuple(sorted(graphConfig["args"]))))
+        _graphKey.append(("kwargs", tuple(sorted(graphConfig["kwargs"].items()))))
         configKey.append(tuple(_graphKey))
 
         configKey.append(tuple(sorted(compileConfig.split())))
@@ -279,7 +279,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
     def _writeResults(self, results: Dict[Tuple, Dict]) -> None:
         resultsToDump = {}
         for key, value in results.items():
-            newKey = json.dumps(key).replace("[", "(").replace("]", ")")
+            newKey = json.dumps(key).replace("[", "(").replace("]", ")").replace(")", ",)").replace("(,)", "()")
             resultsToDump[newKey] = results[key]
 
         with open(self.results_location, "w+") as outfile:
@@ -306,6 +306,3 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         """This method is used to intercept results for the sake of structuring them
         before passing the results back to the run() method"""
         return self._performTest(graphConfig, computeConfig)
-
-    @abc.abstractmethod
-    def analyse(self) -> None: ...

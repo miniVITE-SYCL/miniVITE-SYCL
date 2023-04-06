@@ -1,9 +1,7 @@
-import json
-import ast
 from numbers import Number
 from typing import List, Tuple, Dict, Optional, Iterator, Any, TypeVar
 
-from matpotlib import pyplot as plt
+from matplotlib import pyplot as plt
 from _miniviteTestUtilities import MiniviteVariantTester, config
 
 
@@ -29,7 +27,7 @@ class MinivitePerformanceValidator(MiniviteVariantTester):
 class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
     ## NOTE: There are a total of (60 * 2 * 30) = 3600 tests performed
     ## Strong Scaling: Fixed Problem size + Increasing compute units count
-    ## Weak Scaling: Varied Problem size + Fixed compute units count
+    ## Weak Scaling: Fixed Problem size per processor + Increase compute units count
     results_location = "scaling_results.json"
 
     ## 63 options
@@ -53,9 +51,119 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
         "args": [None,]
     }
 
-    def analyse(self) -> None:
+    ## TODO: This doesn't work on MPI ranks!
+    def strongScaling(self, xSize: int = 10, ySize: int = 10) -> None:
+        plt.cla()
         results = self._loadResults()
-        raise NotImplementedError()
+        problems  = {}
+
+        ## we group up the tests into problems
+        for testConfig, results in results.items():
+            problemConfig, _, computeConfig = testConfig
+            computeConfig = dict(computeConfig)
+
+            syclProblemRun = problemConfig + ("SYCL",)
+            ompProblemRun = problemConfig + ("OpenMP",)
+
+            if syclProblemRun not in problems:
+                problems[syclProblemRun] = {}
+                problems[ompProblemRun] = {}
+            
+            threadCount = computeConfig["MAX_NUM_THREADS"]
+            problems[syclProblemRun][threadCount] = results["SYCL"]
+            problems[ompProblemRun][threadCount] = results["OpenMP"]
+
+        ## Then we start plotting
+        for problem, computeResults in problems.items():
+            ## we compile the averages results
+            threadTimeAverages = {}
+            for threadCount, results in computeResults.items():
+                threadTimes = results["Average Total Time (in s)"]
+                threadTimeAverages[threadCount] = sum(threadTimes) / len(threadTimes)
+
+            threadTimeAverages = list(sorted(threadTimeAverages.items()))
+            timings = []
+            threadCounts = []
+
+            ## We then format the data for easy manipulation
+            for k, v in threadTimeAverages:
+                threadCounts.append(k)
+                timings.append(v)
+
+            ## We the calculate speedup for the results
+            baseTime = timings[0]
+            timeSpeedups = [baseTime / time for time in timings]
+
+            ## We then plot the data
+            plt.plot(threadCounts, timeSpeedups, label=str(problem))
+            
+        plt.title("Strong Scaling")
+        plt.xlabel("Compute Units (Threads)")
+        plt.ylabel("Speedup (x)")
+        plt.legend()
+        plt.savefig("strong_scaling.png")
+
+        return None
+
+    ## TODO: This doesn't work on MPI or with non "-n" args
+    def weakScaling(self, xSize: int = 10, ySize: int = 10) -> None:
+        plt.cla()
+        results = self._loadResults()
+        workloadResources  = {}
+
+        ## we group up the tests into problems
+        for testConfig, results in results.items():
+            problemConfig, _, computeConfig = testConfig
+
+            computeConfig = dict(computeConfig)
+            problemConfig = dict(problemConfig)
+
+            problemSize = int(dict(problemConfig["kwargs"])["-n"])
+            threadCount = int(computeConfig["MAX_NUM_THREADS"])
+            workerLoad = problemSize / threadCount
+
+            ompWorkerLoadLabel = (workerLoad, "OpenMP")
+            syclWorkerLoadLabel = (workerLoad, "SYCL")
+
+            if ompWorkerLoadLabel not in workloadResources:
+                workloadResources[ompWorkerLoadLabel] = {}
+                workloadResources[syclWorkerLoadLabel] = {}
+
+            workloadResources[syclWorkerLoadLabel][threadCount] = results["SYCL"]
+            workloadResources[ompWorkerLoadLabel][threadCount] = results["OpenMP"]
+
+
+        ## Then we start plotting
+        for workerLoadLabel, computeResults in workloadResources.items():
+            ## we compile the averages results
+            threadTimeAverages = {}
+            for threadCount, results in computeResults.items():
+                threadTimes = results["Average Total Time (in s)"]
+                threadTimeAverages[threadCount] = sum(threadTimes) / len(threadTimes)
+
+            threadTimeAverages = list(sorted(threadTimeAverages.items()))
+            timings = []
+            computeSizes = []
+
+            ## We then format the data for easy manipulation
+            for k, v in threadTimeAverages:
+                computeSizes.append(k)
+                timings.append(v)
+
+            ## We the calculate speedup for the results
+            baseTime = timings[0]
+            timeSpeedups = [baseTime / time for time in timings]
+
+            ## We then plot the data
+            plt.plot(computeSizes, timeSpeedups, label=str(workerLoadLabel))
+            
+        plt.title("Weak Scaling")
+        plt.xlabel("Compute Units (Threads)")
+        plt.ylabel("Efficiency (%)")
+        plt.legend()
+        plt.savefig("weak_scaling.png")
+
+
 
 
 
@@ -63,8 +171,8 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
 def main():
     v = MiniviteSingleNodeScaling()
     v.run()
-    v.analyse()
-
+    v.strongScaling()
+    v.weakScaling()
 
 
 if __name__ == "__main__":

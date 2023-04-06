@@ -15,7 +15,7 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
     results_location = "correctness.json"
 
     defaultComputeConfig = {
-        "MAX_MPI_RANKS": [1,2,4],
+        "MAX_MPI_RANKS": [None, 1,2,4],
         "MAX_NUM_THREADS": [1,2,4, 8]
     }
 
