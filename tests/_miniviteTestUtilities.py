@@ -50,7 +50,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
     omp_binary_name: str = "miniVite"
 
     MPIFlags = (
-        None, 
+        None,
         "-DUSE_MPI_RMA",
         "-DUSE_MPI_RMA -DUSE_MPI_ACCUMULATE"
         "-DUSE_MPI_COLLECTIVES",

@@ -27,13 +27,14 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
         "args": [None,]
     }
 
+    resultAttributesSelected = {"Modularity", "Iterations"}
+
     def _collectTestResults(self, graphConfig: config, computeConfig: config, repeats: int = 5) -> Dict[str, Dict[str, Number]]:
-        resultAttributesSelected = {"Average Total Time (in s)", "MODS"}
         testResults = self._performTest(graphConfig, computeConfig, repeats)
 
         formattedResults = {}
-        formattedResults["SYCL"] = {k:v for k, v in testResults["SYCL"].items() if k in resultAttributesSelected}
-        formattedResults["OpenMP"] = {k:v for k, v in testResults["OpenMP"].items() if k in resultAttributesSelected}
+        formattedResults["SYCL"] = {k:v for k, v in testResults["SYCL"].items() if k in self.resultAttributesSelected}
+        formattedResults["OpenMP"] = {k:v for k, v in testResults["OpenMP"].items() if k in self.resultAttributesSelected}
         return formattedResults
 
     def analyse(self) -> None:
