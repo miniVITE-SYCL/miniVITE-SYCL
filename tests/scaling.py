@@ -100,7 +100,7 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
         plt.title("Strong Scaling")
         plt.xlabel("Compute Units (Threads)")
         plt.ylabel("Speedup (x)")
-        plt.legend()
+        plt.legend(loc='center right', bbox_to_anchor=(1.25, 0.5))
         plt.savefig("strong_scaling.png")
 
         return None
@@ -160,7 +160,7 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
         plt.title("Weak Scaling")
         plt.xlabel("Compute Units (Threads)")
         plt.ylabel("Efficiency (%)")
-        plt.legend()
+        plt.legend(loc='center right', bbox_to_anchor=(1.25, 0.5))
         plt.savefig("weak_scaling.png")
 
 
