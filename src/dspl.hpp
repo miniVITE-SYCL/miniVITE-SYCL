@@ -92,7 +92,24 @@ typedef sycl::usm_allocator<std::unordered_set<GraphElem>, sycl::usm::alloc::sha
 // typedef sycl::usm_allocator<std::unordered_set<GraphElem, vec_ge_alloc>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 
 // Defined a SYCL queue using the CPU selector
+#ifdef GPU_DEVICE
+sycl::queue q{sycl::gpu_selector_v};
+#else
 sycl::queue q{sycl::cpu_selector_v};
+#endif
+
+// Variable for setting
+#ifdef SCALING_TESTS
+int threadCount;
+int maxWorkGroupSize;
+int minWorkGroupSize;
+
+#define getWorkGroupSize(workItemCount, threadCount) \
+std::max(std::min(((int) std::ceil( (double) workItemCount / (double) threadCount)), maxWorkGroupSize), minWorkGroupSize)
+
+#endif
+// size = min(max(ceil(len(workItems) / threadCount, minWorkGroupSize), maxWorkGroupSize)
+
 
 // we instantiate USM STL allocators (dependency on sycl::queue q)
 vec_gw_alloc vec_gw_allocator(q);
