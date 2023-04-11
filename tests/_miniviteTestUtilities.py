@@ -151,7 +151,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         ## This compiles both miniVITE and miniVITE-SYCL using the macro definitions
         print(f"Making both variants with flags: {compilationConfig}")
         ompMakeCommand = f"make -B -C {self.omp_source_dir} CXX=\"{self.omp_compiler}\" MACROFLAGS=\"{compilationConfig}\""
-        syclMakeCommand = f"make -B -C {self.sycl_source_dir} CXX=\"{self.sycl_compiler}\" MACROFLAGS=\"{compilationConfig}\""
+        syclMakeCommand = f"make -B -C {self.sycl_source_dir} CXX=\"{self.sycl_compiler}\" MACROFLAGS=\"-DSCALING_TESTS {compilationConfig}\""
         
         subprocess.run(ompMakeCommand, shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(syclMakeCommand, shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)

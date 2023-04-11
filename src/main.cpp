@@ -98,7 +98,7 @@ int main(int argc, char *argv[])
 #ifdef SCALING_TESTS
   const char* env = std::getenv("SYCL_NUM_THREADS");
   if (env == nullptr){
-    std::cerr << "If you compile with SCALING_TESTS, you need to set the env 'SYCL_NUM_THREADS'" << std::endl;
+    std::cerr << "You compiled with -DSCALING_TESTS so you need to set the environment variable 'SYCL_NUM_THREADS'" << std::endl;
     exit(-1);
   }
   threadCount = atoi(env);

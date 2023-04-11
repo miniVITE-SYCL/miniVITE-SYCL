@@ -6,7 +6,7 @@ from _miniviteTestUtilities import MiniviteVariantTester, config
 
 
 class MinivitePerformanceValidator(MiniviteVariantTester):
-    repeat_tests: int = 10
+    repeat_tests: int = 5
 
     MPIFlags = (None,) ## None = default for MPI flags
     DSFlags = ("-DREPLACE_STL_UOSET_WITH_VECTOR",)
@@ -33,7 +33,7 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
     ## 63 options
     defaultComputeConfig = {
         "MAX_MPI_RANKS": [None],
-        "MAX_NUM_THREADS": [1] + list(range(2, 3, 2)),
+        "MAX_NUM_THREADS": [1] + list(range(2, 8+1, 2)),
     }
 
     ## 2 options for compile options
@@ -46,7 +46,7 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
     ## 30 executions
     defaultGraphInputConfig = {
         "kwargs": {
-            "-n": range(1000, 1001, 1000),
+            "-n": range(1000, 1000 + 1 + 8*6000, 6000),
         },
         "args": [None,]
     }
@@ -54,6 +54,9 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
     ## TODO: This doesn't work on MPI ranks!
     def strongScaling(self, xSize: int = 10, ySize: int = 10) -> None:
         plt.cla()
+        fig = plt.figure()
+        ax = plt.subplot(111)
+
         results = self._loadResults()
         problems  = {}
 
@@ -95,19 +98,25 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
             timeSpeedups = [baseTime / time for time in timings]
 
             ## We then plot the data
-            plt.plot(threadCounts, timeSpeedups, label=str(problem))
+            ax.plot(threadCounts, timeSpeedups, label=str(problem))
             
         plt.title("Strong Scaling")
         plt.xlabel("Compute Units (Threads)")
         plt.ylabel("Speedup (x)")
-        plt.legend(loc='center right', bbox_to_anchor=(1.25, 0.5))
-        plt.savefig("strong_scaling.png")
+        
+        box = ax.get_position()
+        box = ax.set_position([box.x0, box.y0, box.width * 0.7, box.height])
+        ax.legend(loc='center left', bbox_to_anchor=(1, 1))
+        fig.savefig("strong_scaling.png", bbox_inches="tight")
 
         return None
 
     ## TODO: This doesn't work on MPI or with non "-n" args
     def weakScaling(self, xSize: int = 10, ySize: int = 10) -> None:
         plt.cla()
+        fig = plt.figure()
+        ax = plt.subplot(111)
+
         results = self._loadResults()
         workloadResources  = {}
 
@@ -155,13 +164,17 @@ class MiniviteSingleNodeScaling(MinivitePerformanceValidator):
             timeSpeedups = [baseTime / time for time in timings]
 
             ## We then plot the data
-            plt.plot(computeSizes, timeSpeedups, label=str(workerLoadLabel))
+            ax.plot(computeSizes, timeSpeedups, label=str(workerLoadLabel))
             
         plt.title("Weak Scaling")
         plt.xlabel("Compute Units (Threads)")
         plt.ylabel("Efficiency (%)")
-        plt.legend(loc='center right', bbox_to_anchor=(1.25, 0.5))
-        plt.savefig("weak_scaling.png")
+
+        box = ax.get_position()
+        box = ax.set_position([box.x0, box.y0, box.width * 0.7, box.height])
+        ax.legend(loc='center left', bbox_to_anchor=(1, 1))
+
+        fig.savefig("weak_scaling.png", bbox_inches="tight")
 
 
 
