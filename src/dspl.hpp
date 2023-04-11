@@ -626,6 +626,14 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   // NOTE: The order of the arguments matters for the parallel_for lambda
   // This order corresponds to the order of the reductions
 
+  // BUG: THere are some weird memory runtime errors we experience with multi-reductions
+  // A workgroup size that would work on two single reductions will consistently raise
+  // runtime errors if the graph input size of the program is large enough. Reducing
+  // the size of the work-group will always* resolve this issue. However if you then
+  // increase the size of the graph (i.e. vertices), this runtime error is observed again
+  
+  // *always - in our limited testing of this issue, we haven't seen any behavior that would
+  // contradict the behavior we observed.
 
 #ifdef ENABLE_SYCL_MULTI_REDUCTION
   const int workGroupSize = 4;
@@ -640,7 +648,7 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
     });
   }).wait();
 
-#elif
+#else
   const int workGroupSize = std::max(std::min(getWorkGroupSize(nv), maxReductionWorkGroupSize / 2), 4);
   q.submit([&](sycl::handler &h){
     h.parallel_for(sycl::nd_range<1>{nv, workGroupSize},
