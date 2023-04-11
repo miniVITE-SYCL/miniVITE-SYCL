@@ -95,6 +95,26 @@ int main(int argc, char *argv[])
   // }
 #endif
 
+#ifdef SCALING_TESTS
+  const char* env = std::getenv("SYCL_NUM_THREADS");
+  if (env == nullptr){
+    std::cerr << "If you compile with SCALING_TESTS, you need to set the env 'SYCL_NUM_THREADS'" << std::endl;
+    exit(-1);
+  }
+  threadCount = atoi(env);
+#else
+  threadCount = q.get_device().get_info<sycl::info::device::max_compute_units>();
+#endif
+
+  maxWorkGroupSize = q.get_device().get_info<sycl::info::device::max_work_group_size>();
+  minWorkGroupSize = 8; // we want a minGroupSize to be at least 8 (or a multiple)
+  maxReductionWorkGroupSize = 1024; // NOTE: No idea if this will work on GPUs. There should be a way to query this value!!!
+  std::cout << "maxWorkGroupSize: " << maxWorkGroupSize << ", minWorkGroupSize: " << minWorkGroupSize << std::endl;
+  // TODO: Provide option to modify this value via environmental varibales
+  // We ignore subgroup sizes for now (since miniVITE does not have explicit SIMD compiler pragms or OpenMP pragms)
+  // https://www.intel.com/content/www/us/en/docs/opencl-sdk/developer-guide-processor-graphics/2019-4/work-group-size-considerations.html#GUID-C1E08AC8-093F-4F80-AE14-E55A5DCE56C4
+  // workGroupSize = min(max(ceil(len(workItems) / threadCount, minWorkGroupSize), maxWorkGroupSize)
+
   MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
   MPI_Comm_rank(MPI_COMM_WORLD, &me);
 
