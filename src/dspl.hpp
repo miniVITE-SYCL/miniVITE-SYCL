@@ -203,7 +203,7 @@ void distInitComm(std::vector<GraphElem, vec_ge_alloc> &pastComm,
 {
   const size_t csz = currComm.size();
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   assert(csz == pastComm.size());
 #endif
 
@@ -273,7 +273,7 @@ GraphElem distGetMaxIndex(const std::vector<GraphElem> &clmap,
 
   GraphElem vertexIndex = 0;
   auto iter = clmap.begin();
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   assert(iter != clmap.end());
 #endif
   do {
@@ -313,7 +313,7 @@ GraphElem distGetMaxIndex(const std::vector<GraphElem> &clmap,
   return maxIndex;
 } // distGetMaxIndex
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
 GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
                                     std::vector<GraphElem> &clmap, 
 				                            std::vector<GraphWeight> &counter, 
@@ -349,34 +349,34 @@ GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1,
     // is_local, direct access local std::vector<GraphElem>
     GraphElem tcomm;
     if ((tail_ >= base) && (tail_ < bound)){
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= (tail_ - base) && (tail_ - base) < currCommSize);
 #endif
       tcomm = currComm[tail_ - base];
     }
     else { // is_remote, lookup map
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= tail_ && tail_ < remoteCommSize);
 #endif
       tcomm = remoteComm[tail_];
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(tcomm != -1); // -1 means not there in the vector - (remoteComm has been replaced with a vector from a unordered_map)
 #endif
     }
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
     assert (0 <= tcomm && tcomm < clmap.size());
 #endif
     const GraphElem storedAlready = clmap[tcomm];
     
     if (storedAlready != -1){
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert (0 <= storedAlready && storedAlready < counter.size());
 #endif
       counter[storedAlready] += weight;
     }
     else {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert (0 <= tcomm && tcomm < clmap.size());
         assert (0 <= counter_size && counter_size < counter.size());
 #endif
@@ -411,7 +411,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
   auto _remoteCupdate = remoteCupdate.data();
   auto _localCupdate = localCupdate.data();
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
   int _localCupdateSize = localCupdate.size();
   int _vDegreeSize = vDegree.size();
   int _clusterWeightSize = clusterWeight.size();
@@ -452,7 +452,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // Current Community is local
       if (cc >= base && cc < bound) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert (0 <= (cc - base) && (cc - base) < _localCinfoSize);
 #endif
         ccDegree=_localCinfo[cc-base].degree;
@@ -460,7 +460,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         currCommIsLocal=true;
       } else {
         // is remote
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert (0 <= (cc) && (cc) < _remoteCinfoSize);
 #endif
         Comm comm = _remoteCinfo[cc];
@@ -471,12 +471,12 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       _dg->edge_range(i, e0, e1);
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert (0 <= i && i < _vDegreeSize);
 #endif
 
       if (e0 != e1) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= cc && cc < clmap.size());
         assert(0 <= i && i < _clusterWeightSize);
 #endif
@@ -484,7 +484,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         counter_size++;
 
         // modified counter, counter_size, clmap
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         selfLoop = distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
                                                   _currComm, _currCommSize, _remoteComm, _remoteCommSize, i, base, bound);
 #else 
@@ -501,7 +501,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
       else
         localTarget = cc;
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= localTarget);
       assert(0 <= (cc - base) && (cc - base) < _localCupdateSize); 	
       assert(0 <= (localTarget - base) && (localTarget - base) < _localCupdateSize); 
@@ -519,7 +519,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // current and target comm are local - atomic updates to vectors
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(base <= localTarget && localTarget < bound);
         assert(base <= cc && cc < bound);
 #endif
@@ -531,7 +531,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // current is local, target is not - do atomic on local, accumulate in Maps for remote
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         assert(0 <= i && i < _vDegreeSize);
 #endif
@@ -549,7 +549,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
             
       // current is remote, target is local - accumulate for current, atomic on local
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         assert(0 <= i && i < _vDegreeSize);
 #endif
@@ -567,7 +567,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
                         
       // current and target are remote - accumulate for both
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         assert(0 <= i && i < _vDegreeSize);
 #endif
@@ -588,7 +588,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         target_comm_size++;
       }
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= i && i < _targetCommSize);
 #endif
       _targetComm[i] = localTarget;
@@ -611,7 +611,7 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   GraphWeight e_a_xx[2] = {0.0, 0.0};
   GraphWeight le_xx = 0.0, la2_x = 0.0;
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   assert((clusterWeight.size() == nv));
 #endif
 
@@ -680,13 +680,13 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   sycl::free(_le_xx, q);
   sycl::free(_la2_x, q);
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   const double t0 = MPI_Wtime();
 #endif
 
   MPI_Allreduce(le_la_xx, e_a_xx, 2, MPI_WEIGHT_TYPE, MPI_SUM, gcomm);
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   const double t1 = MPI_Wtime();
 #endif
 
@@ -832,7 +832,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
     h.parallel_for(ssz, [=](sycl::id<1> i){
 #endif
       const GraphElem vertex = _svdata[i];
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert((vertex >= base) && (vertex < bound));
 #endif
       const GraphElem comm = _currComm[vertex - base];
@@ -1323,7 +1323,7 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
 
       const int tproc = dg.get_owner(i);
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
       assert(tproc != me);
 #endif
       CommInfo rcinfo;
@@ -1478,7 +1478,7 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
       h.parallel_for(rcnt, [=](sycl::id<1> i){
 #endif
         const CommInfo &curr = _rdata[i];
-    #ifdef DEBUG_PRINTF  
+    #ifdef DEBUG_ASSERTIONS  
         assert(dg.get_owner(curr.community) == me);
     #endif
         _localCinfo[curr.community-base].size += curr.size;
@@ -1747,9 +1747,12 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
 
 #ifdef DEBUG_PRINTF  
     t1 = MPI_Wtime();
+    int remoteCommSize = 0;
+    for (auto it = remoteComm.begin(); it != remoteComm.end(); it++){
+      if (*it != -1)
+        remoteCommSize += 1;
+    }
     std::cout << "[" << me << "]Remote community map size: " << remoteComm.size() << std::endl;
-    assert (false) // NOTE: remoteComm.size() is no longer the community map size! This is because instead of a map with elements, it is a sparse array!
-    // TODO: In order to caluclate the remote community size, please iterate over the list, and count the number of non-negative values
     std::cout << "[" << me << "]Iteration communication time: " << (t1 - t0) << std::endl;
 #endif
 
