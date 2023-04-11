@@ -625,16 +625,23 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
 
   // NOTE: The order of the arguments matters for the parallel_for lambda
   // This order corresponds to the order of the reductions
+
+
+#ifdef ENABLE_SYCL_MULTI_REDUCTION
+  const int workGroupSize = 4;
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(sycl::nd_range<1>{nv, local_group_size},
+                   sycl::reduction(_le_xx, std::plus<>()),
+                   sycl::reduction(_la2_x, std::plus<>()),
+                   [=](sycl::nd_item<1> it, auto &_le_xx, auto &_la2_x){
+                      int i = it.get_global_id(0);
+                      _le_xx += _clusterWeight[i];
+                      _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
+    });
+  }).wait();
+
+#elif
   const int workGroupSize = std::max(std::min(getWorkGroupSize(nv), maxReductionWorkGroupSize / 2), 4);
-  // const int workGroupSize = 4;
-
-  // POTENTIAL BUG: At some point in the past, this double reduction caused a segfault
-  // -- It is possible that this was due to an external bug somewhere else, which is why I cannot replicate it currently
-  // Reproduce issue in older commits -> mpirun -n 4 ./miniVITE-SYCL -n 100
-  // This doesn't manifest with MPI np=1, or another value (I think)
-  // This issues doesn't manifest when local_group_size=1 (only value tested)
-  // ==> It's possible that the issue still exists in the above fix attempt, but doesn't manifest in that specific program scenario
-
   q.submit([&](sycl::handler &h){
     h.parallel_for(sycl::nd_range<1>{nv, workGroupSize},
                    sycl::reduction(_le_xx, std::plus<>()),
@@ -654,7 +661,7 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   });
   
   q.wait();
-
+#endif
 
   le_xx = *_le_xx;
   la2_x = *_la2_x;
