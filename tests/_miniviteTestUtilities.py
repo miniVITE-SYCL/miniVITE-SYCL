@@ -147,11 +147,16 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
 
         return results
 
-    def _compileConfig(self, compilationConfig: str) -> None:
+    def _compileConfig(self, compilationFlags: str, computeConfig: config) -> None:
+        ## To set thread count, we need to compile with the relevant flag
+        syclScalingFlags = ""
+        if computeConfig.get("MAX_NUM_THREADS") is not None:
+            syclScalingFlags = "-DSCALING_TESTS"
+
         ## This compiles both miniVITE and miniVITE-SYCL using the macro definitions
-        print(f"Making both variants with flags: {compilationConfig}")
-        ompMakeCommand = f"make -B -C {self.omp_source_dir} CXX=\"{self.omp_compiler}\" MACROFLAGS=\"{compilationConfig}\""
-        syclMakeCommand = f"make -B -C {self.sycl_source_dir} CXX=\"{self.sycl_compiler}\" MACROFLAGS=\"-DSCALING_TESTS {compilationConfig}\""
+        print(f"Making both variants with flags: {compilationFlags}")
+        ompMakeCommand = f"make -B -C {self.omp_source_dir} CXX=\"{self.omp_compiler}\" MACROFLAGS=\"{compilationFlags}\""
+        syclMakeCommand = f"make -B -C {self.sycl_source_dir} CXX=\"{self.sycl_compiler}\" MACROFLAGS=\"{syclScalingFlags} {compilationFlags}\""
         
         subprocess.run(ompMakeCommand, shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(syclMakeCommand, shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
@@ -234,7 +239,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
             if numThreads is not None:
                 os.environ["OMP_NUM_THREADS"] = str(numThreads)
             else:
-                del os.environ["OMP_NUM_THREADS"]
+                os.environ.pop("OMP_NUM_THREADS")
 
             print(f"Executing OpenMP version: {ompBinaryExecuteCommand}")
             results = self._executeCommand(ompBinaryExecuteCommand)
@@ -246,7 +251,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
             if numThreads is not None:
                 os.environ["SYCL_NUM_THREADS"] = str(numThreads)
             else:
-                del os.environ["SYCL_NUM_THREADS"]
+                os.environ.pop("SYCL_NUM_THREADS")
 
             print(f"Executing SYCL version: {syclBinaryExecuteCommand}")
             results = self._executeCommand(syclBinaryExecuteCommand)
@@ -255,20 +260,30 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
 
         return totalResults
 
-    def _run(self, verbose=True) -> None:
-        ## We first setup the range of parameters for both the graph and compute environment
+    def _createParamRange(self) -> Iterator:
         graphInputParamRange = self._createGraphParamRange(self.defaultGraphInputConfig)
         computeParamRange = self._createComputeParamRange(self.defaultComputeConfig)
         compileParamRange = self._createCompileParamRange()
+        return itertools.product(compileParamRange, graphInputParamRange, computeParamRange)
+
+    def _parseConfigFromParamRange(self, config) -> Tuple[config, config, config]:
+        ## NOTE: This allows for a subclass with a custom paramRange format to easily
+        ## format out config into compileConfig, graphConfig, computeConfig
+        return config
+
+    def _run(self, verbose=True) -> None:
+        ## We first setup the range of parameters for both the graph and compute environment
+        paramRange = self._createParamRange()
 
         ## We then start running each of these instances
         results: Dict[Tuple, Tuple] = {}
         prevCompileConfig = None
-        for compileConfig, graphConfig, computeConfig in itertools.product(compileParamRange, graphInputParamRange, computeParamRange):
+        for config in paramRange:
+            compileConfig, graphConfig, computeConfig = self._parseConfigFromParamRange(config)
             configKey = self._createConfigKey(graphConfig, compileConfig, computeConfig)
             if prevCompileConfig != compileConfig:
                 prevCompileConfig = compileConfig
-                self._compileConfig(compileConfig)
+                self._compileConfig(compileConfig, computeConfig)
 
             results[configKey] = self._collectTestResults(graphConfig, computeConfig)
 
