@@ -12,6 +12,7 @@ MACROFLAGS = -DPRINT_DIST_STATS #-DPRINT_EXTRA_NEDGES #-DUSE_MPI_RMA -DUSE_MPI_A
 
 # use -xmic-avx512 instead of -xHost for Intel Xeon Phi platforms
 OPTFLAGS = -O3 -xHost $(MACROFLAGS)
+LINKINGFLAGS = -fsycl-targets=spir64_x86_64 -Xs "-march=avx2"
 # use export ASAN_OPTIONS=verbosity=1 to check ASAN output
 DEBUGFLAGS = -g -g3 -O0 -Wall -Wextra $(MACROFLAGS)
 
@@ -26,7 +27,7 @@ all: $(TARGET)
 	$(CXX) $(CXXFLAGS) -c -o $@ $^
 
 $(TARGET):  $(OBJ)
-	$(CXX) $(MPICXXFLAGS) $^ $(OPTFLAGS) -o $@
+	$(CXX) $(LINKINGFLAGS) $(MPICXXFLAGS) $^ $(OPTFLAGS) -o $@
 
 .PHONY: clean
 

@@ -53,7 +53,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
     MPIFlags = (
         None,
         "-DUSE_MPI_RMA",
-        "-DUSE_MPI_RMA -DUSE_MPI_ACCUMULATE"
+        "-DUSE_MPI_RMA -DUSE_MPI_ACCUMULATE",
         "-DUSE_MPI_COLLECTIVES",
         "-DUSE_MPI_SENDRECV",
     )
@@ -69,6 +69,8 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         "-DDEBUG_PRINTF",
         "-DDEBUG_ASSERTIONS",
     )
+
+    aotParamRange = (None,)
 
     resultFormat = {
         "Average Total Time (in s)": [],
@@ -107,7 +109,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
                     inclusiveFlagsSelected = " ".join(x)
                     makeArgs = ""
                     if MPIFlag is not None:
-                        makeArgs += f"{MPIFlag} "
+                        makeArgs += f" {MPIFlag} "
                     makeArgs += inclusiveFlagsSelected
                     yield makeArgs
 
@@ -147,16 +149,21 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
 
         return results
 
-    def _compileConfig(self, compilationFlags: str, computeConfig: config) -> None:
+    def _compileConfig(self, isAOT: bool, compilationFlags: str, computeConfig: config) -> None:
         ## To set thread count, we need to compile with the relevant flag
         syclScalingFlags = ""
         if computeConfig.get("MAX_NUM_THREADS") is not None:
             syclScalingFlags = "-DSCALING_TESTS"
 
+        if isAOT:
+            linkingFlags = "-fsycl-targets=spir64_x86_64 -Xs \"-march=avx512\""
+        else: ## False or None
+            linkingFlags = ""
+            
         ## This compiles both miniVITE and miniVITE-SYCL using the macro definitions
         print(f"Making both variants with flags: {compilationFlags}")
         ompMakeCommand = f"make -B -C {self.omp_source_dir} CXX=\"{self.omp_compiler}\" MACROFLAGS=\"{compilationFlags}\""
-        syclMakeCommand = f"make -B -C {self.sycl_source_dir} CXX=\"{self.sycl_compiler}\" MACROFLAGS=\"{syclScalingFlags} {compilationFlags}\""
+        syclMakeCommand = f"make -B -C {self.sycl_source_dir} CXX=\"{self.sycl_compiler}\" MACROFLAGS=\"{syclScalingFlags} {compilationFlags}\" LINKINGFLAGS=\"{linkingFlags}\""
         
         subprocess.run(ompMakeCommand, shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         subprocess.run(syclMakeCommand, shell=True, check=True, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
@@ -205,16 +212,20 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         return results
 
     ## TODO: Upgrade to a namedtuple
-    def _createConfigKey(self, graphConfig: config, compileConfig: config, computeConfig: config) -> Tuple[Tuple, Tuple, Tuple]:
+    def _createConfigKey(self, isAOT: Optional[bool], graphConfig: config, compileConfig: config, computeConfig: config) -> Tuple[Tuple, Tuple, Tuple]:
         configKey = []
 
         _graphKey = []
+        
+        configKey.append(("isAOT", bool(isAOT)))
+        configKey.append(tuple(sorted(compileConfig.split())))
+
         _graphKey.append(("args", tuple(sorted(graphConfig["args"]))))
         _graphKey.append(("kwargs", tuple(sorted(graphConfig["kwargs"].items()))))
         configKey.append(tuple(_graphKey))
 
-        configKey.append(tuple(sorted(compileConfig.split())))
         configKey.append(tuple(sorted(computeConfig.items())))
+
         return tuple(configKey)
 
     def _performTest(self, graphConfig: config, computeConfig: config, repeats: int) -> Tuple[Dict[str, List[Number]], Dict[str, List[Number]]]:
@@ -239,7 +250,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
             if numThreads is not None:
                 os.environ["OMP_NUM_THREADS"] = str(numThreads)
             else:
-                os.environ.pop("OMP_NUM_THREADS")
+                os.environ.pop("OMP_NUM_THREADS", None)
 
             print(f"Executing OpenMP version: {ompBinaryExecuteCommand}")
             results = self._executeCommand(ompBinaryExecuteCommand)
@@ -251,7 +262,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
             if numThreads is not None:
                 os.environ["SYCL_NUM_THREADS"] = str(numThreads)
             else:
-                os.environ.pop("SYCL_NUM_THREADS")
+                os.environ.pop("SYCL_NUM_THREADS", None)
 
             print(f"Executing SYCL version: {syclBinaryExecuteCommand}")
             results = self._executeCommand(syclBinaryExecuteCommand)
@@ -264,7 +275,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         graphInputParamRange = self._createGraphParamRange(self.defaultGraphInputConfig)
         computeParamRange = self._createComputeParamRange(self.defaultComputeConfig)
         compileParamRange = self._createCompileParamRange()
-        return itertools.product(compileParamRange, graphInputParamRange, computeParamRange)
+        return itertools.product(self.aotParamRange, compileParamRange, graphInputParamRange, computeParamRange)
 
     def _parseConfigFromParamRange(self, config) -> Tuple[config, config, config]:
         ## NOTE: This allows for a subclass with a custom paramRange format to easily
@@ -278,12 +289,14 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
         ## We then start running each of these instances
         results: Dict[Tuple, Tuple] = {}
         prevCompileConfig = None
+        prevAOT = False
         for config in paramRange:
-            compileConfig, graphConfig, computeConfig = self._parseConfigFromParamRange(config)
-            configKey = self._createConfigKey(graphConfig, compileConfig, computeConfig)
-            if prevCompileConfig != compileConfig:
+            isAOT, compileConfig, graphConfig, computeConfig = self._parseConfigFromParamRange(config)
+            configKey = self._createConfigKey(isAOT, graphConfig, compileConfig, computeConfig)
+            if prevCompileConfig != compileConfig or prevAOT != isAOT:
                 prevCompileConfig = compileConfig
-                self._compileConfig(compileConfig, computeConfig)
+                prevAOT = isAOT
+                self._compileConfig(isAOT, compileConfig, computeConfig)
 
             results[configKey] = self._collectTestResults(graphConfig, computeConfig)
 
@@ -308,7 +321,7 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
 
         results = {}
         for key, value in resultsToLoad.items():
-            newKey = ast.literal_eval(key.replace("null", "None"))
+            newKey = ast.literal_eval(key.replace("null", "None").replace("true", "True").replace("false", "False"))
             results[newKey]  = resultsToLoad[key]
 
         return results
