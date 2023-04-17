@@ -65,8 +65,8 @@ class MiniviteVariantTester(metaclass=abc.ABCMeta):
 
     miscFlags = (
         "-DDISABLE_THREAD_MULTIPLE_CHECK",
-        "-DPRINT_DIST_STATS",
-        "-DDEBUG_PRINTF",
+        # "-DPRINT_DIST_STATS",
+        # "-DDEBUG_PRINTF",
         "-DDEBUG_ASSERTIONS",
     )
 

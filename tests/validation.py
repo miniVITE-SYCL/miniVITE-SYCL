@@ -9,6 +9,7 @@
 
 from numbers import Number
 from typing import List, Tuple, Dict, Optional, Iterator, Any, TypeVar
+import statistics
 
 import scipy
 
@@ -225,9 +226,14 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
         print(len(results) ** 2)
         ## We then calculate the distance for each flag
         for newAttribute, configs in exclusionConfigurations.items():
-            attributeDist = 0
+            attributeResults = {
+                                    "OpenMP - Results Change": {"s.d.": [], "mean": [], "divergence": []},
+                                    "DPC++ - Results Change": {"s.d.": [], "mean": [], "divergence": []},
+                                    "OpenMP and DPC++ - similarity of result change": {"s.d.": [], "mean": [], "divergence": []},
+                                    "OpenMP and DPC++ - similarity of final result": {"s.d.": [], "mean": [], "divergence": []},
+                                }
+
             for inclusion, exclusions in configs.items():
-                consistencyResults = {}
                 ## Each test config can have many configs that a csingle change can be applied to create it
                 ## We'll need to average our metrics.
 
@@ -238,9 +244,47 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                     ## configuration Runs for OpenMP and SYCL
                     inclusionSYCLMods = results[inclusion]["SYCL"]["Modularity"]
                     inclusionOMPMods = results[inclusion]["OpenMP"]["Modularity"]
-
                     exclusionSYCLMods = results[exclusion]["SYCL"]["Modularity"]
                     exclusionOMPMods = results[exclusion]["OpenMP"]["Modularity"]
+
+                    inclusionOMPMean = statistics.mean(inclusionOMPMods)
+                    inclusionOMPStdev = statistics.stdev(inclusionOMPMods)
+                    exclusionOMPMean = statistics.mean(exclusionOMPMods)
+                    exclusionOMPStdev = statistics.stdev(exclusionOMPMods)
+                    OMPStdevDifference = inclusionOMPstdev - exclusionOMPStdev
+                    OMPMeanDifference = inclusionOMPMean - exclusionOMPMean
+                    OMPwassersteinDistance = scipy.wasserstein_distance(inclusionOMPMods, exclusionOMPMods)
+
+                    attributeResults["OpenMP - Results Change"]["s.d."].append(OMPStdevDifference)
+                    attributeResults["OpenMP - Results Change"]["mean"].append(OMPMeanDifference)
+                    attributeResults["OpenMP - Results Change"]["divergence"].append(OMPwassersteinDistance)
+
+                    inclusionSYCLMean = statistics.mean(inclusionSYCLMods)
+                    inclusionSYCLStdev = statistics.stdev(inclusionSYCLMods)
+                    exclusionSYCLMean = statistics.mean(exclusionSYCLMods)
+                    exclusionSYCLStdev = statistics.stdev(exclusionSYCLMods)
+                    SYCLStdevDifference = inclusionSYCLstdev - exclusionSYCLStdev
+                    SYCLMeanDifference = inclusionSYCLMean - exclusionSYCLMean
+                    SYCLwassersteinDistance = scipy.wasserstein_distance(inclusionSYCLMods, exclusionSYCLMods)
+
+                    attributeResults["DPC++ - Results Change"]["s.d."].append(SYCLStdevDifference)
+                    attributeResults["DPC++ - Results Change"]["mean"].append(SYCLMeanDifference)
+                    attributeResults["DPC++ - Results Change"]["divergence"].append(SYCLwassersteinDistance)
+
+                    attributeResults["OpenMP and DPC++ - similarity of result change"]["s.d."].append(SYCLStdevDifference - OMPStdevDifference)
+                    attributeResults["OpenMP and DPC++ - similarity of result change"]["mean"].append(SYCLMeanDifference - OMPMeanDifference)
+                    attributeResults["OpenMP and DPC++ - similarity of result change"]["divergence"].append(SYCLwassersteinDistance - OMPwassersteinDistance)
+
+                    attributeResults["OpenMP and DPC++ - similarity of final result"]["s.d."].append(inclusionOMPStdev - inclusionOMPStdev)
+                    attributeResults["OpenMP and DPC++ - similarity of final result"]["mean"].append(exclusionSYCLMean - inclusionOMPMean)
+                    attributeResults["OpenMP and DPC++ - similarity of final result"]["divergence"].append(scipy.wasserstein_distance(inclusionSYCLMods, inclusionOMPMods))
+
+                ## End For Loop
+
+                for comparison, results in attributeResults.items():
+                    for measures in results:
+                        results[measures] = statistics.mean(results[measures])
+
 
 
                     ## Each config (SYCL or OpenMP), will have a list of modularity values
@@ -267,7 +311,7 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                     ##          - skewness / distribution shape?
 
                     ## TODO: Are there any measure I'm missing here?
-                    ## TODO: How would I "average" these results, would it be ok to just average it ordinally?
+                    ## TODO: How would I "average" these results, would it be ok to just average it ordinally?v  
 
                     ## NOTE: Modularity has a range (-1/2, 1), where a modularity > 0 means bebuctter than random chance
                     ## - SOme sources say the range is (-1, 1)
@@ -275,12 +319,8 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                     # scipy.stats.wasserstein_distance(x, y)
 
 
-
-
-            ## We manipulate consistencyResults to get "val"
-            val = ...
             ## here we calculate some val
-            consistencyTable[newAttribute] = val
+            consistencyTable[newAttribute] = attributeResults
         
 
         print(consistencyTable)

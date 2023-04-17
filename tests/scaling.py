@@ -1,6 +1,6 @@
 from numbers import Number
 from typing import List, Tuple, Dict, Optional, Iterator, Any, TypeVar
-import iertools
+import itertools
 from matplotlib import pyplot as plt
 from _miniviteTestUtilities import MiniviteVariantTester, config
 
@@ -62,7 +62,7 @@ class MiniviteSingleNodeStrongScaler(MinivitePerformanceValidator):
 
         ## we group up the tests into problems
         for testConfig, results in results.items():
-            problemConfig, _, computeConfig = testConfig
+            _, _, problemConfig, computeConfig = testConfig
             computeConfig = dict(computeConfig)
 
             syclProblemRun = problemConfig + ("SYCL",)
@@ -176,9 +176,9 @@ class MiniviteSingleNodeWeakScaler(MinivitePerformanceValidator):
         weakScalingParamRange = self._createWeakScalingParamRange()
         return itertools.product(compileParamRange, weakScalingParamRange)
 
-    def _parseParamConfigFromParamRange(self, config) -> Tuple[config, config, config]:
-        compileConfig, (graphInputConfig, computeConfig) = config
-        return compileConfig, graphInputConfig, computeConfig
+    def _parseConfigFromParamRange(self, config) -> Tuple[config, config, config]:
+        isAOT, compileConfig, (graphInputConfig, computeConfig) = config
+        return isAOT, compileConfig, graphInputConfig, computeConfig
 
     ## TODO: This doesn't work on MPI or with non "-n" args
     def weakScaling(self) -> None:
@@ -191,7 +191,7 @@ class MiniviteSingleNodeWeakScaler(MinivitePerformanceValidator):
 
         ## we group up the tests into problems
         for testConfig, results in results.items():
-            problemConfig, _, computeConfig = testConfig
+            _, _, problemConfig, computeConfig = testConfig
 
             computeConfig = dict(computeConfig)
             problemConfig = dict(problemConfig)
@@ -262,30 +262,30 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
         "args": [None,]
     }
 
-
-    def _createParamRange(self) -> Iterator:
-        graphInputParamRange = self._createGraphParamRange(self.defaultGraphInputConfig)
-        computeParamRange = self._createComputeParamRange(self.defaultComputeConfig)
-        compileParamRange = self._createCompileParamRange()
-
-        return itertools.product(compileParamRange, graphInputParamRange, computeParamRange)
+    aotParamRange = (True, False)
 
     def timeGraphSizes(self) -> None:
         ## We should iterate over the graphs enabling all threads! (No scaling involved)
         results = self._loadResults()
-        timings = {"SYCL": {}, "OpenMP": {}}
+        timings = {"DPC++ (AOT)": {}, "DPC++ (JIT)": {},  "OpenMP": {}}
 
         for testConfig, results in results.items():
-            problemConfig, _, _ = testConfig
+            isAot, _, problemConfig, _ = testConfig
 
             problemConfig = dict(problemConfig)
-            problemSize = int(dict(problemConfig["kwargs"])["-n"])
-            timings["SYCL"][graphSize] = results["SYCL"]["Average Total Time (in s)"]
+            graphSize = int(dict(problemConfig["kwargs"])["-n"])
+            if isAot[1] is True:
+                syclKey = "DPC++ (AOT)"
+            else:
+                syclKey = "DPC++ (JIT)"
+
+            timings[syclKey][graphSize] = results["SYCL"]["Average Total Time (in s)"]
             timings["OpenMP"][graphSize] = results["OpenMP"]["Average Total Time (in s)"]
 
         ## TODO: Add standard deviation grayed out area to plot
         graphSizes = sorted(list(self.defaultGraphInputConfig["kwargs"]["-n"]))
-        syclTimings = [sum(times) / len(times) for size, times in sorted(timings["SYCL"].items())]
+        syclJitTimings = [sum(times) / len(times) for size, times in sorted(timings["DPC++ (JIT)"].items())]
+        syclAotTimings = [sum(times) / len(times) for size, times in sorted(timings["DPC++ (AOT)"].items())]
         ompTimings = [sum(times) / len(times) for size, times in sorted(timings["OpenMP"].items())]
 
         ## Plot the absolute timings
@@ -293,8 +293,9 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
         plt.cla()
         fig = plt.figure()
         ax = plt.subplot(111)
-
-        ax.plot(graphSizes, syclTimings, label="SYCL")
+        print(graphSizes)
+        ax.plot(graphSizes, syclJitTimings, label="DPC++ (JIT)")
+        ax.plot(graphSizes, syclAotTimings, label="DPC++ (AOT)")
         ax.plot(graphSizes, ompTimings, label="OpenMP")
 
         plt.title("Absolute Performance Timings (All Resources Available)")
@@ -310,8 +311,10 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
         fig = plt.figure()
         ax = plt.subplot(111)
 
-        relativeTimes = [syclTimings[i] / ompTimings[i] for i in range(len(syclTimings))]
-        ax.plot(graphSizes, relativeTimes, label="SYCL against OpenMP")
+        relativeJitTimes = [syclJitTimings[i] / ompTimings[i] for i in range(len(syclJitTimings))]
+        relativeAotTimes = [syclAotTimings[i] / ompTimings[i] for i in range(len(syclAotTimings))]
+        ax.plot(graphSizes, relativeJitTimes, label="DPC++ (JIT) against OpenMP")
+        ax.plot(graphSizes, relativeAotTimes, label="DPC++ (AOT) against OpenMP")
 
         plt.title("Relative Performance Timing (All Resources Available)")
         plt.xlabel("Graph Vertex Count")
@@ -323,9 +326,9 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
 ## For weak scaling, we want to generate workloads
 
 def main():
-    v = MiniviteSingleNodeStrongScaler()
+    v = MiniviteSingleNodeTiming()
     v.run()
-    v.strongScaling()
+    v.timeGraphSizes()
 
 
 

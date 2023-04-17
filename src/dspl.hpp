@@ -680,13 +680,13 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   sycl::free(_le_xx, q);
   sycl::free(_la2_x, q);
 
-#ifdef DEBUG_ASSERTIONS  
+#ifdef DEBUG_PRINTF  
   const double t0 = MPI_Wtime();
 #endif
 
   MPI_Allreduce(le_la_xx, e_a_xx, 2, MPI_WEIGHT_TYPE, MPI_SUM, gcomm);
 
-#ifdef DEBUG_ASSERTIONS  
+#ifdef DEBUG_PRINTF
   const double t1 = MPI_Wtime();
 #endif
 
@@ -1323,9 +1323,9 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
 
       const int tproc = dg.get_owner(i);
 
-#ifdef DEBUG_ASSERTIONS  
-      assert(tproc != me);
-#endif
+// #ifdef DEBUG_ASSERTIONS  
+//       assert(tproc != me);
+// #endif
       CommInfo rcinfo;
 
       rcinfo.community = i;
@@ -1468,7 +1468,9 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
     // Ported to SYCL
     auto _localCinfo = localCinfo.data();
     auto _rdata = rdata.data();
-
+#ifdef DEBUG_ASSERTIONS
+    const Graph *_dg = &dg;
+#endif
     q.submit([&](sycl::handler &h){
 #ifdef SCALING_TESTS
       const int workGroupSize = getWorkGroupSize(rcnt);
@@ -1479,7 +1481,7 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
 #endif
         const CommInfo &curr = _rdata[i];
     #ifdef DEBUG_ASSERTIONS  
-        assert(dg.get_owner(curr.community) == me);
+        assert(_dg->get_owner(curr.community) == me);
     #endif
         _localCinfo[curr.community-base].size += curr.size;
         _localCinfo[curr.community-base].degree += curr.degree;
@@ -1646,9 +1648,9 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 } // exchangeVertexReqs
 
 #if defined(USE_MPI_RMA)
-GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
+GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
         size_t &ssz, size_t &rsz, std::vector<GraphElem> &ssizes, std::vector<GraphElem> &_rsizes, 
-        std::vector<GraphElem> &_svdata, std::vector<GraphElem> &rvdata, const GraphWeight lower, 
+        std::vector<GraphElem> &_svdata, std::vector<GraphElem> &_rvdata, const GraphWeight lower, 
         const GraphWeight thresh, int &iters, MPI_Win &commwin)
 #else
 GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
