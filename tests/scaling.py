@@ -1,8 +1,21 @@
 from numbers import Number
 from typing import List, Tuple, Dict, Optional, Iterator, Any, TypeVar
 import itertools
+import matplotlib
 from matplotlib import pyplot as plt
+from matplotlib.legend_handler import HandlerLine2D
 from _miniviteTestUtilities import MiniviteVariantTester, config
+
+
+def updateProp(handle, origin):
+    handle.update_from(origin)
+    handle.set_marker("")
+
+matplotlib.rc('xtick', labelsize=13) 
+matplotlib.rc('ytick', labelsize=13)
+matplotlib.rcParams['xtick.major.pad']='15'
+matplotlib.rcParams['ytick.major.pad']='15'
+matplotlib.rcParams.update({'font.size': 14})
 
 
 class MinivitePerformanceValidator(MiniviteVariantTester):
@@ -64,6 +77,8 @@ class MiniviteSingleNodeStrongScaler(MinivitePerformanceValidator):
         for testConfig, results in results.items():
             _, _, problemConfig, computeConfig = testConfig
             computeConfig = dict(computeConfig)
+            # if dict(dict(problemConfig)["kwargs"])["-n"] == 1000:
+            #     continue
 
             syclProblemRun = problemConfig + ("SYCL",)
             ompProblemRun = problemConfig + ("OpenMP",)
@@ -98,15 +113,18 @@ class MiniviteSingleNodeStrongScaler(MinivitePerformanceValidator):
             timeSpeedups = [baseTime / time for time in timings]
 
             ## We then plot the data
-            ax.plot(threadCounts, timeSpeedups, label=str(problem))
+            label = f"({problem[1][1][0]}, {problem[-1]})"
+            linestyle = "dashed" if problem[-1].lower() == "openmp" else "solid"
+            ax.plot(threadCounts, timeSpeedups, label=str(label), linestyle=linestyle, marker='x')
             
-        plt.title("Strong Scaling")
-        plt.xlabel("Compute Units (Threads)")
+        # plt.title("Strong Scaling")
+        plt.xlabel("Threads")
         plt.ylabel("Speedup (x)")
         
         box = ax.get_position()
-        box = ax.set_position([box.x0, box.y0, box.width * 0.7, box.height])
-        ax.legend(loc='center left', bbox_to_anchor=(1, 1))
+        box = ax.set_position([box.x0, box.y0, box.width * 0.7, box.height * 0.8])
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), handler_map={plt.Line2D:HandlerLine2D(update_func=updateProp)})
+        
         fig.savefig("strong_scaling.png", bbox_inches="tight")
 
         return None
@@ -174,7 +192,7 @@ class MiniviteSingleNodeWeakScaler(MinivitePerformanceValidator):
         ## The order we want to create our iterator is [compile, graph, compute]
         compileParamRange = self._createCompileParamRange()
         weakScalingParamRange = self._createWeakScalingParamRange()
-        return itertools.product(compileParamRange, weakScalingParamRange)
+        return itertools.product(self.aotParamRange, ompileParamRange, weakScalingParamRange)
 
     def _parseConfigFromParamRange(self, config) -> Tuple[config, config, config]:
         isAOT, compileConfig, (graphInputConfig, computeConfig) = config
@@ -213,6 +231,8 @@ class MiniviteSingleNodeWeakScaler(MinivitePerformanceValidator):
 
         ## Then we start plotting
         for workerLoadLabel, computeResults in workloadResources.items():
+            # if (workerLoadLabel[0] - 1000) % 1200 != 0:
+            #     continue
             ## we compile the averages results
             threadTimeAverages = {}
             for threadCount, results in computeResults.items():
@@ -230,18 +250,20 @@ class MiniviteSingleNodeWeakScaler(MinivitePerformanceValidator):
 
             ## We the calculate speedup for the results
             baseTime = timings[0]
-            timeSpeedups = [baseTime / time for time in timings]
+            timeSpeedups = [(baseTime / time) * 100 for time in timings]
 
             ## We then plot the data
-            ax.plot(computeSizes, timeSpeedups, label=str(workerLoadLabel))
+            label = f"((\"-n\", {workerLoadLabel[0]}), {workerLoadLabel[1]})"
+            linestyle = "dashed" if workerLoadLabel[1].lower() == "openmp" else "solid"
+            ax.plot(computeSizes, timeSpeedups, label=str(label), linestyle=linestyle, marker='x')
             
-        plt.title("Weak Scaling")
-        plt.xlabel("Compute Units (Threads)")
+        # plt.title("Weak Scaling")
+        plt.xlabel("Threads")
         plt.ylabel("Efficiency (%)")
 
         box = ax.get_position()
-        box = ax.set_position([box.x0, box.y0, box.width * 0.7, box.height])
-        ax.legend(loc='center left', bbox_to_anchor=(1, 1))
+        box = ax.set_position([box.x0, box.y0, box.width * 0.7, box.height * 0.8])
+        ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), handler_map={plt.Line2D:HandlerLine2D(update_func=updateProp)})
 
         fig.savefig("weak_scaling.png", bbox_inches="tight")
 
@@ -261,6 +283,8 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
         },
         "args": [None,]
     }
+
+    DSFlags = ()
 
     aotParamRange = (True, False)
 
@@ -289,11 +313,10 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
         ompTimings = [sum(times) / len(times) for size, times in sorted(timings["OpenMP"].items())]
 
         ## Plot the absolute timings
-
         plt.cla()
         fig = plt.figure()
         ax = plt.subplot(111)
-        print(graphSizes)
+
         ax.plot(graphSizes, syclJitTimings, label="DPC++ (JIT)")
         ax.plot(graphSizes, syclAotTimings, label="DPC++ (AOT)")
         ax.plot(graphSizes, ompTimings, label="OpenMP")
@@ -326,10 +349,17 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
 ## For weak scaling, we want to generate workloads
 
 def main():
+    # v = MiniviteSingleNodeWeakScaler()
+    v.run()
+    # v.weakScaling()
+
+    # v = MiniviteSingleNodeStrongScaler()
+    v.run()
+    # v.strongScaling()
+
     v = MiniviteSingleNodeTiming()
     v.run()
-    v.timeGraphSizes()
-
+    # v.timeGraphSizes()
 
 
 if __name__ == "__main__":
