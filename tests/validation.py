@@ -10,8 +10,9 @@
 from numbers import Number
 from typing import List, Tuple, Dict, Optional, Iterator, Any, TypeVar
 import statistics
-
+from scipy import stats
 import scipy
+import pprint
 
 from _miniviteTestUtilities import MiniviteVariantTester, config
 
@@ -167,7 +168,7 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
         ## We accumulate all the exclusionConfigs
         counter = 0
         for testcase1 in results:
-            graphConfig1, compileConfig1, computeConfig1 = testcase1
+            isAoT1, compileConfig1, graphConfig1, computeConfig1 = testcase1
             for testcase2 in results:
                 counter+=1
                 if testcase1 == testcase2:
@@ -176,9 +177,10 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                 ## We retrieve all changes in in each subconfiguration of the testcase2
 
                 changes = []
-                graphConfig2, compileConfig2, computeConfig2 = testcase2
+                isAoT2, compileConfig2, graphConfig2, computeConfig2 = testcase2
 
                 graphConfigChanges = self._getGraphConfigChanges(graphConfig1, graphConfig2)
+                #print(graphConfigChanges)
                 changes.extend(graphConfigChanges)
                 if len(changes) > 1:
                     continue
@@ -195,6 +197,8 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
 
                 if len(changes) != 1:
                     ## this means there are 0 changes (which means our "if testcase1 == testcase2" condition failed)
+                    print(testcase1)
+                    print(testcase2)
                     raise ValueError("One of the above configChanges lists must have an element")
 
                 ## At this point in the code we have a single change from testcase2 -> testcase1 (otherwise we have exited the for loop)
@@ -217,15 +221,25 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                     exclusionConfigurations[newAttribute] = {}
 
                 if testcase1 not in exclusionConfigurations[newAttribute]:
-                    exclusionConfigurations[newAttribute][testcase1] = set()
-                
-                exclusionConfigurations[newAttribute][testcase1].add(testcase2)
+                    exclusionConfigurations[newAttribute][testcase1] = []
+
+                #print(testcase1)
+                #print(testcase2)
+                assert testcase1 in results
+                assert testcase2 in results
+                exclusionConfigurations[newAttribute][testcase1].append(testcase2)
                     
-        print(exclusionConfigurations)
-        print(counter)
-        print(len(results) ** 2)
+        # print(list(exclusionConfigurations.keys())[0])
+        #rint(counter)
+        print(len(results) ** 1)
+        x = (('isAOT', False), (), (('args', (None,)), ('kwargs', (('-n', 1000),))), (('MAX_MPI_RANKS', 1), ('MAX_NUM_THREADS', None)))
+        assert x in results
+
         ## We then calculate the distance for each flag
         for newAttribute, configs in exclusionConfigurations.items():
+            print("\n\n")
+            print(newAttribute)
+            summaryResults = {}
             attributeResults = {
                                     "OpenMP - Results Change": {"s.d.": [], "mean": [], "divergence": []},
                                     "DPC++ - Results Change": {"s.d.": [], "mean": [], "divergence": []},
@@ -233,13 +247,18 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                                     "OpenMP and DPC++ - similarity of final result": {"s.d.": [], "mean": [], "divergence": []},
                                 }
 
+
             for inclusion, exclusions in configs.items():
+                print(f"inclusion: {inclusion}")
+
+
                 ## Each test config can have many configs that a csingle change can be applied to create it
                 ## We'll need to average our metrics.
 
                 for exclusion in exclusions:
-                    ## We want to calculate similarity between the newly added attribute
+                    print(f"exclusion: {exclusion}")
 
+                    ## We want to calculate similarity between the newly added attribute
                     ## The below four variables contain a list of modularities on
                     ## configuration Runs for OpenMP and SYCL
                     inclusionSYCLMods = results[inclusion]["SYCL"]["Modularity"]
@@ -251,9 +270,9 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                     inclusionOMPStdev = statistics.stdev(inclusionOMPMods)
                     exclusionOMPMean = statistics.mean(exclusionOMPMods)
                     exclusionOMPStdev = statistics.stdev(exclusionOMPMods)
-                    OMPStdevDifference = inclusionOMPstdev - exclusionOMPStdev
+                    OMPStdevDifference = inclusionOMPStdev - exclusionOMPStdev
                     OMPMeanDifference = inclusionOMPMean - exclusionOMPMean
-                    OMPwassersteinDistance = scipy.wasserstein_distance(inclusionOMPMods, exclusionOMPMods)
+                    OMPwassersteinDistance = stats.wasserstein_distance(inclusionOMPMods, exclusionOMPMods)
 
                     attributeResults["OpenMP - Results Change"]["s.d."].append(OMPStdevDifference)
                     attributeResults["OpenMP - Results Change"]["mean"].append(OMPMeanDifference)
@@ -263,9 +282,9 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
                     inclusionSYCLStdev = statistics.stdev(inclusionSYCLMods)
                     exclusionSYCLMean = statistics.mean(exclusionSYCLMods)
                     exclusionSYCLStdev = statistics.stdev(exclusionSYCLMods)
-                    SYCLStdevDifference = inclusionSYCLstdev - exclusionSYCLStdev
+                    SYCLStdevDifference = inclusionSYCLStdev - exclusionSYCLStdev
                     SYCLMeanDifference = inclusionSYCLMean - exclusionSYCLMean
-                    SYCLwassersteinDistance = scipy.wasserstein_distance(inclusionSYCLMods, exclusionSYCLMods)
+                    SYCLwassersteinDistance = stats.wasserstein_distance(inclusionSYCLMods, exclusionSYCLMods)
 
                     attributeResults["DPC++ - Results Change"]["s.d."].append(SYCLStdevDifference)
                     attributeResults["DPC++ - Results Change"]["mean"].append(SYCLMeanDifference)
@@ -277,15 +296,17 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
 
                     attributeResults["OpenMP and DPC++ - similarity of final result"]["s.d."].append(inclusionOMPStdev - inclusionOMPStdev)
                     attributeResults["OpenMP and DPC++ - similarity of final result"]["mean"].append(exclusionSYCLMean - inclusionOMPMean)
-                    attributeResults["OpenMP and DPC++ - similarity of final result"]["divergence"].append(scipy.wasserstein_distance(inclusionSYCLMods, inclusionOMPMods))
+                    attributeResults["OpenMP and DPC++ - similarity of final result"]["divergence"].append(stats.wasserstein_distance(inclusionSYCLMods, inclusionOMPMods))
+            # print(attributeResults)
 
-                ## End For Loop
+            ## End For Loop
 
-                for comparison, results in attributeResults.items():
-                    for measures in results:
-                        results[measures] = statistics.mean(results[measures])
+            for comparison, measurement in attributeResults.items():
+                summaryResults[comparison] = {}
+                for metric, value in measurement.items():
+                    summaryResults[comparison][metric] = sum(value) / len(value)
 
-
+            print(summaryResults)
 
                     ## Each config (SYCL or OpenMP), will have a list of modularity values
                     
@@ -320,10 +341,30 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
 
 
             ## here we calculate some val
-            consistencyTable[newAttribute] = attributeResults
+            consistencyTable[newAttribute] = summaryResults
         
+        pprint.pprint(consistencyTable)
+        print("\n\n")
 
-        print(consistencyTable)
+        print("Printing to Latex Table (without \\\\)")
+
+        tablestr = ""
+        sigfigs = 4
+        for change, metrics in consistencyTable.items():
+            tablestr += str(change) + " "
+            a = metrics["DPC++ - Results Change"]
+            b = metrics["OpenMP - Results Change"]
+            c = metrics["OpenMP and DPC++ - similarity of final result"]
+            d = metrics["OpenMP and DPC++ - similarity of result change"]
+
+            for measure in [a,b,c,d]:
+                stdev = float('{:.{p}g}'.format(measure['s.d.'], p=sigfigs))
+                mean = float('{:.{p}g}'.format(measure['mean'], p=sigfigs))
+                dist = float('{:.{p}g}'.format(measure['divergence'], p=sigfigs))
+                tablestr += f"& {stdev} & {mean} & {dist} "
+
+            tablestr += "\n"
+        print(tablestr)
 
         ## For each flag and its corresponding exclusionConfigs,
         ## we "compare" their results in OpenMP and SYCL
@@ -378,7 +419,7 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
 
 def main():
     v = MiniviteCorrectnessValidator()
-    v.run()
+    #v.run()
     v.generateMetrics()
 
 
