@@ -279,7 +279,7 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
 
     defaultGraphInputConfig = {
         "kwargs": {
-            "-n": range(1000, 1000 + 1 + 8*15000, 6000),
+            "-n": range(1000, 1000 + 1 + 1*33000, 33000),
         },
         "args": [None,]
     }
@@ -311,20 +311,21 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
         syclJitTimings = [sum(times) / len(times) for size, times in sorted(timings["DPC++ (JIT)"].items())]
         syclAotTimings = [sum(times) / len(times) for size, times in sorted(timings["DPC++ (AOT)"].items())]
         ompTimings = [sum(times) / len(times) for size, times in sorted(timings["OpenMP"].items())]
-
+        
         ## Plot the absolute timings
         plt.cla()
         fig = plt.figure()
         ax = plt.subplot(111)
 
-        ax.plot(graphSizes, syclJitTimings, label="DPC++ (JIT)")
-        ax.plot(graphSizes, syclAotTimings, label="DPC++ (AOT)")
+        ax.plot(graphSizes, syclJitTimings, label="DPC++ (JIT)", marker="x")
+        ax.plot(graphSizes, syclAotTimings, label="DPC++ (AOT)", marker="x")
         ax.plot(graphSizes, ompTimings, label="OpenMP")
 
         plt.title("Absolute Performance Timings (All Resources Available)")
         plt.xlabel("Graph Vertex Count")
         plt.ylabel("Time (s)")
-        ax.legend()
+        ax.legend(handler_map={plt.Line2D:HandlerLine2D(update_func=updateProp)})
+
         fig.savefig("absolute_timings_diagram.png", bbox_inches="tight")
 
 
@@ -333,16 +334,21 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
         plt.cla()
         fig = plt.figure()
         ax = plt.subplot(111)
-
+        
         relativeJitTimes = [syclJitTimings[i] / ompTimings[i] for i in range(len(syclJitTimings))]
         relativeAotTimes = [syclAotTimings[i] / ompTimings[i] for i in range(len(syclAotTimings))]
-        ax.plot(graphSizes, relativeJitTimes, label="DPC++ (JIT) against OpenMP")
-        ax.plot(graphSizes, relativeAotTimes, label="DPC++ (AOT) against OpenMP")
+        ax.plot(graphSizes, relativeJitTimes, label="DPC++ (JIT) against OpenMP", linestyle="solid", linewidth=3.0, markersize=10, markerfacecolor="black", alpha=1, marker="x")
+        ax.plot(graphSizes, relativeAotTimes, label="DPC++ (AOT) against OpenMP", linestyle="dashed",  linewidth=3.0, markersize=10, markerfacecolor="black", alpha=1, dashes=(7,7), marker="x")
 
-        plt.title("Relative Performance Timing (All Resources Available)")
+        # plt.title("Relative Performance Timing (All Resources Available)")
         plt.xlabel("Graph Vertex Count")
         plt.ylabel("Slowdown (x)")
-        ax.legend()
+        plt.xticks(graphSizes)
+                
+        box = ax.get_position()
+        box = ax.set_position([box.x0, box.y0, box.width * 0.9, box.height * 1])
+        ax.legend(handler_map={plt.Line2D:HandlerLine2D(update_func=updateProp)})
+        
         fig.savefig("relative_timings_diagram.png", bbox_inches="tight")
 
 
@@ -350,16 +356,16 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
 
 def main():
     # v = MiniviteSingleNodeWeakScaler()
-    v.run()
+    # v.run()
     # v.weakScaling()
 
     # v = MiniviteSingleNodeStrongScaler()
-    v.run()
+    # v.run()
     # v.strongScaling()
 
     v = MiniviteSingleNodeTiming()
-    v.run()
-    # v.timeGraphSizes()
+    #v.run()
+    v.timeGraphSizes()
 
 
 if __name__ == "__main__":

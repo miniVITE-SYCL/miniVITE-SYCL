@@ -1,5 +1,3 @@
-
-
 CXX = icpx -fsycl ## dpcpp is deprecated now!
 MPICXX = mpiicc
 VPATH = ./src
