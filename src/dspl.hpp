@@ -92,7 +92,23 @@ typedef sycl::usm_allocator<std::unordered_set<GraphElem>, sycl::usm::alloc::sha
 // typedef sycl::usm_allocator<std::unordered_set<GraphElem, vec_ge_alloc>, sycl::usm::alloc::shared> vec_uset_ge_alloc;
 
 // Defined a SYCL queue using the CPU selector
+#ifdef GPU_DEVICE
+sycl::queue q{sycl::gpu_selector_v};
+#else
 sycl::queue q{sycl::cpu_selector_v};
+#endif
+
+// Variable for setting
+int threadCount;
+int maxWorkGroupSize;
+int minWorkGroupSize;
+int maxReductionWorkGroupSize;
+
+#define getWorkGroupSize(workItemCount) \
+std::max(std::min(((int) std::ceil( (double) workItemCount / (double) threadCount)), maxWorkGroupSize), minWorkGroupSize)
+// size = min(max(ceil(len(workItems) / threadCount, minWorkGroupSize), maxWorkGroupSize)
+
+#define getReductionWorkGroupSize(workItemCount) std::min(getWorkGroupSize(workItemCount), maxReductionWorkGroupSize)
 
 // we instantiate USM STL allocators (dependency on sycl::queue q)
 vec_gw_alloc vec_gw_allocator(q);
@@ -115,7 +131,13 @@ void distSumVertexDegree(const Graph &g, std::vector<GraphWeight, vec_gw_alloc> 
   const GraphElem nv = g.get_lnv();
 
   q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+    const int workGroupSize = getWorkGroupSize(nv);
+    h.parallel_for(sycl::nd_range<1>{nv, workGroupSize}, [=](sycl::nd_item<1> item){
+      int i = item.get_global_id();
+#else
     h.parallel_for(nv, [=](sycl::id<1> i){
+#endif
       GraphElem e0, e1;
       GraphWeight tw = 0.0;
 
@@ -142,7 +164,8 @@ GraphWeight distCalcConstantForSecondTerm(const std::vector<GraphWeight, vec_gw_
   int me = -1;
 
   const size_t vsz = vDegree.size();
-  const int local_group_size = 4;
+  const int workGroupSize = getReductionWorkGroupSize(vsz);
+  // const int workGroupSize = 4;
 
   auto _vDegree = vDegree.data();
   GraphWeight localWeight = 0;
@@ -151,7 +174,7 @@ GraphWeight distCalcConstantForSecondTerm(const std::vector<GraphWeight, vec_gw_
 
   q.submit([&](sycl::handler &h){
     h.parallel_for(
-      sycl::nd_range<1>{vsz, local_group_size},
+      sycl::nd_range<1>{vsz, workGroupSize},
       sycl::reduction(usm_localWeight, std::plus<>()),
       [=](sycl::nd_item<1> it, auto& usm_localWeight) {
         int i = it.get_global_id(0);
@@ -180,7 +203,7 @@ void distInitComm(std::vector<GraphElem, vec_ge_alloc> &pastComm,
 {
   const size_t csz = currComm.size();
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   assert(csz == pastComm.size());
 #endif
 
@@ -188,7 +211,13 @@ void distInitComm(std::vector<GraphElem, vec_ge_alloc> &pastComm,
   auto _currComm = currComm.data();
 
   q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+    const int workGroupSize = getWorkGroupSize(csz);
+    h.parallel_for(sycl::nd_range<1>{csz, workGroupSize}, [=](sycl::nd_item<1> item){
+      int i = item.get_global_id();
+#else
     h.parallel_for(csz, [=](sycl::id<1> i){
+#endif
       _pastComm[i] = i + base;
       _currComm[i] = i + base;
     });
@@ -244,7 +273,7 @@ GraphElem distGetMaxIndex(const std::vector<GraphElem> &clmap,
 
   GraphElem vertexIndex = 0;
   auto iter = clmap.begin();
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   assert(iter != clmap.end());
 #endif
   do {
@@ -284,7 +313,7 @@ GraphElem distGetMaxIndex(const std::vector<GraphElem> &clmap,
   return maxIndex;
 } // distGetMaxIndex
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
 GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1, 
                                     std::vector<GraphElem> &clmap, 
 				                            std::vector<GraphWeight> &counter, 
@@ -320,34 +349,34 @@ GraphWeight distBuildLocalMapCounter(const GraphElem e0, const GraphElem e1,
     // is_local, direct access local std::vector<GraphElem>
     GraphElem tcomm;
     if ((tail_ >= base) && (tail_ < bound)){
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= (tail_ - base) && (tail_ - base) < currCommSize);
 #endif
       tcomm = currComm[tail_ - base];
     }
     else { // is_remote, lookup map
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= tail_ && tail_ < remoteCommSize);
 #endif
       tcomm = remoteComm[tail_];
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(tcomm != -1); // -1 means not there in the vector - (remoteComm has been replaced with a vector from a unordered_map)
 #endif
     }
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
     assert (0 <= tcomm && tcomm < clmap.size());
 #endif
     const GraphElem storedAlready = clmap[tcomm];
     
     if (storedAlready != -1){
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert (0 <= storedAlready && storedAlready < counter.size());
 #endif
       counter[storedAlready] += weight;
     }
     else {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert (0 <= tcomm && tcomm < clmap.size());
         assert (0 <= counter_size && counter_size < counter.size());
 #endif
@@ -382,7 +411,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
   auto _remoteCupdate = remoteCupdate.data();
   auto _localCupdate = localCupdate.data();
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
   int _localCupdateSize = localCupdate.size();
   int _vDegreeSize = vDegree.size();
   int _clusterWeightSize = clusterWeight.size();
@@ -397,7 +426,13 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
   const Graph *_dg = &dg;
 
   q.submit([&](sycl::handler &h){
-   h.parallel_for(nv, [=](sycl::id<1> i){
+#ifdef SCALING_TESTS
+    const int workGroupSize = getWorkGroupSize(nv);
+    h.parallel_for(sycl::nd_range<1>{nv, workGroupSize}, [=](sycl::nd_item<1> item){
+      int i = item.get_global_id();
+#else
+    h.parallel_for(nv, [=](sycl::id<1> i){
+#endif
       GraphElem localTarget = -1;
       GraphElem e0, e1, selfLoop = 0;
       
@@ -417,7 +452,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // Current Community is local
       if (cc >= base && cc < bound) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert (0 <= (cc - base) && (cc - base) < _localCinfoSize);
 #endif
         ccDegree=_localCinfo[cc-base].degree;
@@ -425,7 +460,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         currCommIsLocal=true;
       } else {
         // is remote
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert (0 <= (cc) && (cc) < _remoteCinfoSize);
 #endif
         Comm comm = _remoteCinfo[cc];
@@ -436,12 +471,12 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       _dg->edge_range(i, e0, e1);
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert (0 <= i && i < _vDegreeSize);
 #endif
 
       if (e0 != e1) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= cc && cc < clmap.size());
         assert(0 <= i && i < _clusterWeightSize);
 #endif
@@ -449,7 +484,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         counter_size++;
 
         // modified counter, counter_size, clmap
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         selfLoop = distBuildLocalMapCounter(e0, e1, clmap, counter, counter_size, _dg, 
                                                   _currComm, _currCommSize, _remoteComm, _remoteCommSize, i, base, bound);
 #else 
@@ -466,7 +501,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
       else
         localTarget = cc;
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= localTarget);
       assert(0 <= (cc - base) && (cc - base) < _localCupdateSize); 	
       assert(0 <= (localTarget - base) && (localTarget - base) < _localCupdateSize); 
@@ -484,7 +519,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // current and target comm are local - atomic updates to vectors
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(base <= localTarget && localTarget < bound);
         assert(base <= cc && cc < bound);
 #endif
@@ -496,7 +531,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
 
       // current is local, target is not - do atomic on local, accumulate in Maps for remote
       if ((localTarget != cc) && (localTarget != -1) && currCommIsLocal && !targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         assert(0 <= i && i < _vDegreeSize);
 #endif
@@ -514,7 +549,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
             
       // current is remote, target is local - accumulate for current, atomic on local
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         assert(0 <= i && i < _vDegreeSize);
 #endif
@@ -532,7 +567,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
                         
       // current and target are remote - accumulate for both
       if ((localTarget != cc) && (localTarget != -1) && !currCommIsLocal && !targetCommIsLocal) {
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
         assert(0 <= localTarget && localTarget < _remoteCupdateSize);
         assert(0 <= i && i < _vDegreeSize);
 #endif
@@ -553,7 +588,7 @@ void distExecuteLouvainIteration(const GraphElem nv, const Graph &dg, const std:
         target_comm_size++;
       }
 
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert(0 <= i && i < _targetCommSize);
 #endif
       _targetComm[i] = localTarget;
@@ -576,7 +611,7 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
   GraphWeight e_a_xx[2] = {0.0, 0.0};
   GraphWeight le_xx = 0.0, la2_x = 0.0;
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_ASSERTIONS  
   assert((clusterWeight.size() == nv));
 #endif
 
@@ -590,15 +625,18 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
 
   // NOTE: The order of the arguments matters for the parallel_for lambda
   // This order corresponds to the order of the reductions
-  int local_group_size = 4;
 
-  // POTENTIAL BUG: At some point in the past, this double reduction caused a segfault
-  // -- It is possible that this was due to an external bug somewhere else, which is why I cannot replicate it currently
-  // Reproduce issue in older commits -> mpirun -n 4 ./miniVITE-SYCL -n 100
-  // This doesn't manifest with MPI np=1, or another value (I think)
-  // This issues doesn't manifest when local_group_size=1 (only value tested)
-  // ==> It's possible that the issue still exists in the above fix attempt, but doesn't manifest in that specific program scenario
+  // BUG: THere are some weird memory runtime errors we experience with multi-reductions
+  // A workgroup size that would work on two single reductions will consistently raise
+  // runtime errors if the graph input size of the program is large enough. Reducing
+  // the size of the work-group will always* resolve this issue. However if you then
+  // increase the size of the graph (i.e. vertices), this runtime error is observed again
+  
+  // *always - in our limited testing of this issue, we haven't seen any behavior that would
+  // contradict the behavior we observed.
 
+#ifdef ENABLE_SYCL_MULTI_REDUCTION
+  const int workGroupSize = 4;
   q.submit([&](sycl::handler &h){
     h.parallel_for(sycl::nd_range<1>{nv, local_group_size},
                    sycl::reduction(_le_xx, std::plus<>()),
@@ -610,6 +648,28 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
     });
   }).wait();
 
+#else
+  const int workGroupSize = std::max(std::min(getWorkGroupSize(nv), maxReductionWorkGroupSize / 2), 4);
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(sycl::nd_range<1>{nv, workGroupSize},
+                   sycl::reduction(_le_xx, std::plus<>()),
+                   [=](sycl::nd_item<1> it, auto &_le_xx){
+                      int i = it.get_global_id(0);
+                      _le_xx += _clusterWeight[i];
+    });
+  });
+
+  q.submit([&](sycl::handler &h){
+    h.parallel_for(sycl::nd_range<1>{nv, workGroupSize},
+                   sycl::reduction(_la2_x, std::plus<>()),
+                   [=](sycl::nd_item<1> it, auto &_la2_x){
+                      int i = it.get_global_id(0);
+                      _la2_x += static_cast<GraphWeight>(_localCinfo[i].degree) * static_cast<GraphWeight>(_localCinfo[i].degree); 
+    });
+  });
+  
+  q.wait();
+#endif
 
   le_xx = *_le_xx;
   la2_x = *_la2_x;
@@ -626,7 +686,7 @@ GraphWeight distComputeModularity(const Graph &g, std::vector<Comm, vec_comm_all
 
   MPI_Allreduce(le_la_xx, e_a_xx, 2, MPI_WEIGHT_TYPE, MPI_SUM, gcomm);
 
-#ifdef DEBUG_PRINTF  
+#ifdef DEBUG_PRINTF
   const double t1 = MPI_Wtime();
 #endif
 
@@ -649,7 +709,13 @@ void distUpdateLocalCinfo(std::vector<Comm, vec_comm_alloc> &localCinfo, const s
   GraphElem csz = localCinfo.size();
 
   q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+    const int workGroupSize = getWorkGroupSize(csz);
+    h.parallel_for(sycl::nd_range<1>{csz, workGroupSize}, [=](sycl::nd_item<1> item){
+      int i = item.get_global_id();
+#else
     h.parallel_for(csz, [=](sycl::id<1> i){
+#endif
       _localCinfo[i].size += _localCupdate[i].size;
       _localCinfo[i].degree += _localCupdate[i].degree;
     });
@@ -663,7 +729,13 @@ void distCleanCWandCU(const GraphElem nv, std::vector<GraphWeight, vec_gw_alloc>
   auto _localCupdate = localCupdate.data();
 
   q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+    const int workGroupSize = getWorkGroupSize(nv);
+    h.parallel_for(sycl::nd_range<1>{nv, workGroupSize}, [=](sycl::nd_item<1> item){
+      int i = item.get_global_id();
+#else
     h.parallel_for(nv, [=](sycl::id<1> i){
+#endif
       _clusterWeight[i] = 0;
       _localCupdate[i].degree = 0;
       _localCupdate[i].size = 0;
@@ -752,9 +824,15 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   auto _currComm = currComm.data();
 
   q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+    const int workGroupSize = getWorkGroupSize(ssz);
+    h.parallel_for(sycl::nd_range<1>{ssz, workGroupSize}, [=](sycl::nd_item<1> item){
+      int i = item.get_global_id();
+#else
     h.parallel_for(ssz, [=](sycl::id<1> i){
+#endif
       const GraphElem vertex = _svdata[i];
-#ifdef DEBUG_PRINTF
+#ifdef DEBUG_ASSERTIONS
       assert((vertex >= base) && (vertex < bound));
 #endif
       const GraphElem comm = _currComm[vertex - base];
@@ -905,7 +983,9 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   t0 = MPI_Wtime();
 #endif
   GraphElem stcsz = 0, rtcsz = 0;
-  int local_group_size = 4;
+  const int workGroupSize = getReductionWorkGroupSize(nprocs);
+  // const int workGroupSize = 4;
+
 
   // Ported to SYCL
   GraphElem *_stcsz = sycl::malloc_shared<GraphElem>(1, q);
@@ -916,7 +996,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
 
   q.submit([&](sycl::handler &h){
     h.parallel_for(
-      sycl::nd_range<1>{nprocs, local_group_size},
+      sycl::nd_range<1>{nprocs, workGroupSize},
       sycl::reduction(_stcsz, std::plus<>()),
       [=](sycl::nd_item<1> it, auto &_stcsz){
       int i = it.get_global_id(0);
@@ -947,7 +1027,7 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
   // TODO: Replace explicit group size with default SYCL runtime group size selection
   q.submit([&](sycl::handler &h){
     h.parallel_for(
-      sycl::nd_range<1>{nprocs, local_group_size},
+      sycl::nd_range<1>{nprocs, workGroupSize},
       sycl::reduction(_rtcsz, std::plus<>()),
       [=](sycl::nd_item<1> it, auto& _rtcsz) {
         int i = it.get_global_id(0);
@@ -1007,7 +1087,13 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
         auto _rdispls = rdispls.data();
 
         q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+          const int workGroupSize = getWorkGroupSize(rcsizes[i]);
+          h.parallel_for(sycl::nd_range<1>{rcsizes[i], workGroupSize}, [=](sycl::nd_item<1> item){
+            int j = item.get_global_id();
+#else
           h.parallel_for(rcsizes[i], [=](sycl::id<1> j){
+#endif
             const GraphElem comm = _rcomms[_rdispls[i] + j];
             _sinfo[_rdispls[i] + j] = {comm, _localCinfo[comm-base].size, _localCinfo[comm-base].degree};
           });
@@ -1091,7 +1177,13 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
         auto _sinfo = sinfo.data();
 
         q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+          const int workGroupSize = getWorkGroupSize(rcsizes[i]);
+          h.parallel_for(sycl::nd_range<1>{rcsizes[i], workGroupSize}, [=](sycl::nd_item<1> item){
+            int j = item.get_global_id();
+#else
           h.parallel_for(rcsizes[i], [=](sycl::id<1> j){
+#endif
             const GraphElem comm = _rcomms[rpos + j];
             _sinfo[rpos + j] = {comm, _localCinfo[comm-base].size, _localCinfo[comm-base].degree};
           });
@@ -1126,7 +1218,13 @@ void fillRemoteCommunities(const Graph &dg, const int me, const int nprocs,
           auto _sinfo = sinfo.data();
 
           q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+            const int workGroupSize = getWorkGroupSize(rcsizes[i]);
+            h.parallel_for(sycl::nd_range<1>{rcsizes[i], workGroupSize}, [=](sycl::nd_item<1> item){
+              int j = item.get_global_id();
+#else
             h.parallel_for(rcsizes[i], [=](sycl::id<1> j){
+#endif
               const GraphElem comm = _rcomms[rpos + j];
               _sinfo[rpos + j] = {comm, _localCinfo[comm-base].size, _localCinfo[comm-base].degree};
             });
@@ -1225,9 +1323,9 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
 
       const int tproc = dg.get_owner(i);
 
-#ifdef DEBUG_PRINTF  
-      assert(tproc != me);
-#endif
+// #ifdef DEBUG_ASSERTIONS  
+//       assert(tproc != me);
+// #endif
       CommInfo rcinfo;
 
       rcinfo.community = i;
@@ -1248,8 +1346,16 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
     // Ported to SYCL
     auto _send_sz = send_sz.data();
     auto _remoteArray = remoteArray.data();
+
+
     q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+      const int workGroupSize = getWorkGroupSize(nprocs);
+      h.parallel_for(sycl::nd_range<1>{nprocs, workGroupSize}, [=](sycl::nd_item<1> item){
+        int i = item.get_global_id();
+#else
       h.parallel_for(nprocs, [=](sycl::id<1> i){
+#endif
         _send_sz[i] = _remoteArray[i].size();
       });
     }).wait();
@@ -1275,13 +1381,15 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
   {
     // NOTE: I've been unable to combine the below two into a
     // double reduction without getting runtime errors
-    int local_group_size = 4;
+    const int workGroupSize = getReductionWorkGroupSize(nprocs);
+    // const int workGroupSize = 4;
+
     auto _send_sz = send_sz.data();
     auto _recv_sz = recv_sz.data();
 
     q.submit([&](sycl::handler &h){
       h.parallel_for(
-          sycl::nd_range<1>{nprocs, local_group_size},
+          sycl::nd_range<1>{nprocs, workGroupSize},
           sycl::reduction(_rcnt, std::plus<>()),
           [=](sycl::nd_item<1> it, auto& _rcnt) {
             int i = it.get_global_id(0);
@@ -1291,7 +1399,7 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
 
     q.submit([&](sycl::handler &h){
       h.parallel_for(
-          sycl::nd_range<1>{nprocs, local_group_size},
+          sycl::nd_range<1>{nprocs, workGroupSize},
           sycl::reduction(_scnt, std::plus<>()),
           [=](sycl::nd_item<1> it, auto& _scnt) {
             int i = it.get_global_id(0);
@@ -1360,12 +1468,20 @@ void updateRemoteCommunities(const Graph &dg, std::vector<Comm, vec_comm_alloc> 
     // Ported to SYCL
     auto _localCinfo = localCinfo.data();
     auto _rdata = rdata.data();
-
+#ifdef DEBUG_ASSERTIONS
+    const Graph *_dg = &dg;
+#endif
     q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+      const int workGroupSize = getWorkGroupSize(rcnt);
+      h.parallel_for(sycl::nd_range<1>{rcnt, workGroupSize}, [=](sycl::nd_item<1> item){
+        int i = item.get_global_id();
+#else
       h.parallel_for(rcnt, [=](sycl::id<1> i){
+#endif
         const CommInfo &curr = _rdata[i];
-    #ifdef DEBUG_PRINTF  
-        assert(dg.get_owner(curr.community) == me);
+    #ifdef DEBUG_ASSERTIONS  
+        assert(_dg->get_owner(curr.community) == me);
     #endif
         _localCinfo[curr.community-base].size += curr.size;
         _localCinfo[curr.community-base].degree += curr.degree;
@@ -1434,9 +1550,11 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
   *_rsz_r = rsz_r;
   auto _rsizes = rsizes.data();
 
-  int local_group_size = 4;
+  const int workGroupSize = getReductionWorkGroupSize(nprocs);
+  // const int workGroupSize = 4;
+
   q.submit([&](sycl::handler &h){
-    h.parallel_for(sycl::nd_range<1> {nprocs, local_group_size},
+    h.parallel_for(sycl::nd_range<1> {nprocs, workGroupSize},
                   sycl::reduction(_rsz_r, std::plus<>()),
                   [=](sycl::nd_item<1> it, auto &_rsz_r){
                     int i = it.get_global_id(0);
@@ -1530,9 +1648,9 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 } // exchangeVertexReqs
 
 #if defined(USE_MPI_RMA)
-GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &dg,
+GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
         size_t &ssz, size_t &rsz, std::vector<GraphElem> &ssizes, std::vector<GraphElem> &_rsizes, 
-        std::vector<GraphElem> &_svdata, std::vector<GraphElem> &rvdata, const GraphWeight lower, 
+        std::vector<GraphElem> &_svdata, std::vector<GraphElem> &_rvdata, const GraphWeight lower, 
         const GraphWeight thresh, int &iters, MPI_Win &commwin)
 #else
 GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
@@ -1631,9 +1749,12 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
 
 #ifdef DEBUG_PRINTF  
     t1 = MPI_Wtime();
+    int remoteCommSize = 0;
+    for (auto it = remoteComm.begin(); it != remoteComm.end(); it++){
+      if (*it != -1)
+        remoteCommSize += 1;
+    }
     std::cout << "[" << me << "]Remote community map size: " << remoteComm.size() << std::endl;
-    assert (false) // NOTE: remoteComm.size() is no longer the community map size! This is because instead of a map with elements, it is a sparse array!
-    // TODO: In order to caluclate the remote community size, please iterate over the list, and count the number of non-negative values
     std::cout << "[" << me << "]Iteration communication time: " << (t1 - t0) << std::endl;
 #endif
 
@@ -1673,7 +1794,13 @@ GraphWeight distLouvainMethod(const int me, const int nprocs, const Graph &_dg,
       auto _targetComm = targetComm.data();
 
       q.submit([&](sycl::handler &h){
+#ifdef SCALING_TESTS
+        const int workGroupSize = getWorkGroupSize(nv);
+        h.parallel_for(sycl::nd_range<1>{nv, workGroupSize}, [=](sycl::nd_item<1> item){
+          int i = item.get_global_id();
+#else
         h.parallel_for(nv, [=](sycl::id<1> i){
+#endif
           GraphElem tmp = _pastComm[i];
           _pastComm[i] = _currComm[i];
           _currComm[i] = _targetComm[i];
