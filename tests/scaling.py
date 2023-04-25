@@ -355,16 +355,16 @@ class MiniviteSingleNodeTiming(MinivitePerformanceValidator):
 ## For weak scaling, we want to generate workloads
 
 def main():
-    # v = MiniviteSingleNodeWeakScaler()
-    # v.run()
-    # v.weakScaling()
+    v = MiniviteSingleNodeWeakScaler()
+    v.run()
+    v.weakScaling()
 
-    # v = MiniviteSingleNodeStrongScaler()
-    # v.run()
-    # v.strongScaling()
+    v = MiniviteSingleNodeStrongScaler()
+    v.run()
+    v.strongScaling()
 
     v = MiniviteSingleNodeTiming()
-    #v.run()
+    v.run()
     v.timeGraphSizes()
 
 

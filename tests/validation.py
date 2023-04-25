@@ -419,7 +419,7 @@ class MiniviteCorrectnessValidator(MiniviteVariantTester):
 
 def main():
     v = MiniviteCorrectnessValidator()
-    #v.run()
+    v.run()
     v.generateMetrics()
 
 
